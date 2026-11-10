@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+data/
+*.sqlite*
+*.fcproj
+*.log
+.env
+proof/
+cloud-bridge/target/
+cloud-bridge/bin/
+native-helper/bin/
+
+# Local notes contain real-media validation and operational details.
+/HANDOVER.md
+/VALIDATION.md

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "frameatlas": {
+      "command": "/Users/mohesh/Desktop/dev_work/FrameAtlas/run.sh",
+      "args": ["mcp"]
+    }
+  }
+}
