@@ -31,7 +31,42 @@ the saved queue setting. Wait for the process to exit before starting its replac
 Ctrl-C/SIGTERM stop processing and retain queued work. Restart `serve` after stopping a
 separately attached worker if you want the UI to own processing again.
 
-## What works
+## Back up and restore the catalogue
+
+Create a portable ZIP while the local app is running:
+
+```sh
+./run.sh backup /absolute/path/FrameAtlas-backup.zip
+./run.sh inspect-backup /absolute/path/FrameAtlas-backup.zip
+```
+
+The default backup includes a consistent SQLite snapshot and referenced small previews,
+SHA-256 payload checksums, row counts, restore instructions and a standalone Python restore
+tool. It excludes full originals, model weights, credentials and temporary downloads.
+Use `--database-only` to omit previews. Upload the completed ZIP to private off-device
+storage such as your own Google Drive. The backup command does not upload it automatically.
+
+On a new instance, install this code checkout and Python 3.9+, then:
+
+```sh
+./run.sh restore /absolute/path/FrameAtlas-backup.zip --to /absolute/path/FrameAtlas-restored
+FRAMEATLAS_DATA=/absolute/path/FrameAtlas-restored ./run.sh serve --port 7319
+```
+
+The destination must **not exist**. Restore validates every payload checksum, SQLite integrity,
+foreign keys and saved row counts before publishing. No existing catalogue is replaced. The queue
+starts paused, interrupted jobs need explicit retry, and old editing retrieval requests are cancelled.
+Machine-specific local source paths are cleared by default; use `--keep-local-paths` only for
+intentional same-computer recovery. Historical provenance and stable cloud IDs remain.
+Reconnect Photos/Studio, relink local originals and install native models separately when needed.
+Expired Google selections need refreshing only when downloading originals, not for metadata search.
+
+The ZIP also contains `RESTORE.txt` and `restore_frameatlas.py`. If no FrameAtlas checkout is
+available yet, extract only that Python file and run `python3 restore_frameatlas.py restore
+/absolute/path/backup.zip --to /absolute/path/NEW-data-folder`. A code checkout is still required
+to run the restored web app. Checksums detect accidental corruption, not malicious replacement.
+
+## Catalogue features
 
 - Metadata import from existing AutoCut Google Photos selections and Studio local recordings.
   Saved Photos sidecars are also recovered when their cached originals were previously removed;
