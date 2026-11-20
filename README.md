@@ -6,6 +6,13 @@ stdio MCP server share a local SQLite catalogue. Google Photos and Insta360 rema
 of record; the app retains metadata, timecoded scene descriptions, transcripts, tags, categories,
 editor corrections, story ideas, and small previews. It does not maintain another library of full originals.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=P3VMqTmsAlM"><img src="https://img.youtube.com/vi/P3VMqTmsAlM/maxresdefault.jpg" width="720" alt="Video: An AI Agent Edited This Video on My MacBook | AutoCut + FrameAtlas (Malayalam, with English subtitles)"></a>
+</p>
+
+**[Watch: an AI agent edited this video on my MacBook](https://www.youtube.com/watch?v=P3VMqTmsAlM)** (Malayalam, English subtitles): FrameAtlas found
+the footage for it. **[Blog post: how to run FrameAtlas and AutoCut, by hand and with an agent](https://www.h4hacks.com/2026/11/blog-post_21.html)**.
+
 ## Run on this Mac
 
 Double-click **Open FrameAtlas.command**, or:
