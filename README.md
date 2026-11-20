@@ -1,6 +1,7 @@
 # FrameAtlas
 
-A separate, private side project for finding the footage you already have. The browser UI and
+A side project for finding the footage you already have, built alongside
+[AutoCut](https://github.com/moheshmohan/AutoCut). The browser UI and
 stdio MCP server share a local SQLite catalogue. Google Photos and Insta360 remain the sources
 of record; the app retains metadata, timecoded scene descriptions, transcripts, tags, categories,
 editor corrections, story ideas, and small previews. It does not maintain another library of full originals.
@@ -10,7 +11,8 @@ editor corrections, story ideas, and small previews. It does not maintain anothe
 Double-click **Open FrameAtlas.command**, or:
 
 ```sh
-cd /Users/mohesh/Desktop/dev_work/FrameAtlas
+git clone https://github.com/moheshmohan/FrameAtlas
+cd FrameAtlas
 ./run.sh serve
 ```
 
@@ -424,7 +426,7 @@ framework, runs in a separate bounded process, and leaves the video-analysis GPU
 When Google says the saved sign-in expired, run the existing secure broker flow:
 
 ```sh
-/Users/mohesh/Desktop/dev_work/Autocut/target/agent-main/release/filmcraft-cli photos auth
+filmcraft-cli photos auth
 ```
 
 Complete consent before its five-minute callback timeout. Credentials stay in FilmCraft's existing
@@ -589,7 +591,7 @@ the broker after upgrading FilmCraft's OAuth API or Rust.
 Use `.mcp.json` in an MCP-capable client, or configure:
 
 ```json
-{"command":"/Users/mohesh/Desktop/dev_work/FrameAtlas/run.sh","args":["mcp"]}
+{"command":"/absolute/path/to/FrameAtlas/run.sh","args":["mcp"]}
 ```
 
 MCP queues share the same database. Keep `./run.sh serve` or the separate `./run.sh worker` running
@@ -606,7 +608,9 @@ python3 -m frameatlas.cli stats
 ./run.sh test
 ```
 
-Override `FILMCRAFT_CLI` / `FRAMEATLAS_CLOUD_BRIDGE` to use compatible native builds elsewhere.
+FrameAtlas finds the AutoCut CLI through `FILMCRAFT_CLI`, then `filmcraft-cli` on `PATH`, then a
+sibling `../Autocut` checkout's release build. Override `FILMCRAFT_CLI` / `FRAMEATLAS_CLOUD_BRIDGE`
+to use compatible native builds elsewhere.
 
 ## Security and data ownership
 

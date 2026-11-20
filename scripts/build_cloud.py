@@ -6,7 +6,9 @@ import sys
 from cloud_publish import publish
 
 root = Path(__file__).resolve().parent.parent
-native = Path(os.environ.get("FILMCRAFT_CLI", "/Users/mohesh/Desktop/dev_work/Autocut/target/agent-main/release/filmcraft-cli"))
+sys.path.insert(0, str(root))
+from frameatlas.native import default_cli
+native = Path(default_cli())
 out = root / "cloud-bridge/bin/frameatlas-cloud"
 out.parent.mkdir(parents=True, exist_ok=True)
 command = ["cargo", "build", "--manifest-path", str(root / "cloud-bridge/Cargo.toml"), "--offline"]

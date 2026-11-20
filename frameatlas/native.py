@@ -3,12 +3,25 @@ import json
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
 import threading
 import time
 import tempfile
 
-CLI = os.environ.get("FILMCRAFT_CLI", "/Users/mohesh/Desktop/dev_work/Autocut/target/agent-main/release/filmcraft-cli")
+def default_cli():
+    """FILMCRAFT_CLI, else filmcraft-cli on PATH, else a sibling AutoCut checkout's release build."""
+    found = os.environ.get("FILMCRAFT_CLI") or shutil.which("filmcraft-cli")
+    if found:
+        return found
+    sibling = Path(__file__).resolve().parent.parent.parent / "Autocut" / "target"
+    for build in (sibling / "agent-main/release/filmcraft-cli", sibling / "release/filmcraft-cli"):
+        if build.exists():
+            return str(build)
+    return "filmcraft-cli"
+
+
+CLI = default_cli()
 TICKS = 254016000000
 
 
