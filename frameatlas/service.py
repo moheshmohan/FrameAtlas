@@ -10,6 +10,13 @@ from .metadata import picker_camera
 from .worker import broker, resolve, Cache, ANALYSIS_RESERVE
 
 
+def whole(value):
+    """A count from a query string ("25") or JSON (25); anything else is passed on to be refused."""
+    if isinstance(value, str) and value.isascii() and value.isdigit() and len(value) <= 9:
+        return int(value)
+    return value
+
+
 class Service:
     def __init__(self, store):
         self.store = store
@@ -40,16 +47,18 @@ class Service:
             return capture_info.backfill(self.store)
         if action == "idea_pad":
             return idea_pad.list_ideas(self.store, args.get("status", ""), args.get("origin", ""),
-                                       args.get("limit", 200), args.get("offset", 0))
+                                       whole(args.get("limit", 200)), whole(args.get("offset", 0)))
         if action == "idea_pad_add":
-            fields = {k: args[k] for k in ("logline", "notes", "format", "tags", "status", "asset_ids") if k in args}
-            return idea_pad.add(self.store, args.get("title"), **fields)
+            known = {"title", "logline", "notes", "format", "tags", "status", "asset_ids"}
+            if set(args) - known:
+                raise ValueError("Unknown idea field: " + sorted(set(args) - known)[0])
+            return idea_pad.add(self.store, args.get("title"), **{k: args[k] for k in known - {"title"} if k in args})
         if action == "idea_pad_update":
             return idea_pad.update(self.store, args.get("id"), **{k: v for k, v in args.items() if k != "id"})
         if action == "idea_pad_delete":
             return idea_pad.delete(self.store, args.get("id"))
         if action == "idea_pad_moments":
-            return idea_pad.moments(self.store, args.get("since", ""), args.get("until", ""), args.get("limit", 40))
+            return idea_pad.moments(self.store, args.get("since", ""), args.get("until", ""), whole(args.get("limit", 40)))
         if action == "idea_pad_generate":
             return idea_pad.generate(self.store, args.get("model", ""), args.get("count", 5),
                                      args.get("since", ""), args.get("until", ""), args.get("focus", ""),

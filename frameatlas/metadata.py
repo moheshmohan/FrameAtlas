@@ -139,13 +139,14 @@ def facts(asset):
     recorded = camera(metadata)
     status = analysis.get("photo_gps_status") or analysis.get("video_gps_status") or metadata.get("gps_status")
     picture = {k: video.get(k) for k in ("width", "height", "codec") if video.get(k) not in (None, "")}
-    rate = video.get("frame_rate")
+    # Stills carry the probe's default rate; a frame rate means something only for moving pictures.
+    rate = video.get("frame_rate") if asset.get("kind") == "video" else None
     if isinstance(rate, dict) and type(rate.get("num")) is int and type(rate.get("den")) is int and rate["den"] > 0 < rate["num"]:
         picture["fps"] = round(rate["num"] / rate["den"], 3)
     elif type(rate) in (int, float) and 0 < rate < 2000:
         picture["fps"] = rate
     capture = metadata.get("camera") if isinstance(metadata.get("camera"), dict) else {}
-    for key in ("width", "height", "fps"):
+    for key in ("width", "height", "fps") if asset.get("kind") == "video" else ("width", "height"):
         if key in capture and key not in picture:
             picture[key] = capture[key]
     return {"captured": asset.get("captured") or "", "when": when(asset.get("captured")),

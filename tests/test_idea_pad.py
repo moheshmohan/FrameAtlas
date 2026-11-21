@@ -46,7 +46,9 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(metadata.camera({"camera": {"make": "Apple", "model": "Apple iPhone 15"}})["label"], "Apple iPhone 15")
         self.assertEqual(metadata.camera({"camera": "Insta360 X5"})["label"], "Insta360 X5")
         self.assertIsNone(metadata.camera({"camera": {"width": 10}}))
-        facts = metadata.facts({"filename": "IMG_1.HEIC", "captured": "2024-07-01T18:30:00Z",
+        still = metadata.facts({"kind": "photo", "analysis": {"probe": {"video": {"width": 4032, "frame_rate": {"num": 30000, "den": 1001}}}}})
+        self.assertEqual(still["picture"], {"width": 4032})
+        facts = metadata.facts({"kind": "video", "filename": "IMG_1.HEIC", "captured": "2024-07-01T18:30:00Z",
                                 "metadata": {"camera": {"make": "Apple", "model": "iPhone 15"}, "gps_status": "not_provided_by_picker"},
                                 "analysis": {"probe": {"video": {"width": 1920, "height": 1080, "frame_rate": {"num": 30000, "den": 1001}}}}, "position": None})
         self.assertEqual(facts["camera"]["label"], "Apple iPhone 15")
@@ -198,6 +200,62 @@ class IdeaPadTests(unittest.TestCase):
             for bad in ({"count": 0}, {"count": "3"}, {"include_used": "yes"}, {"model": "llama:70b"}):
                 with self.assertRaises(ValueError):
                     self.service.dispatch("idea_pad_generate", bad)
+
+    def test_generated_text_is_checked_against_the_moment(self):
+        long_summary = "A close-up of a computer screen displaying flight information for a flight to Amsterdam " + "x" * 300
+        trip = self.add_day("2024-05-25", 8, "trip-", summary=long_summary)
+        self.service.dispatch("idea_pad_add", {"title": "Existing Idea"})
+        sent = []
+        def reply(path, payload, timeout):
+            sent.append(json.loads(payload["messages"][1]["content"]))
+            ideas = [{"moment_id": "m:2024-05-25", "title": "Departures: A 360° Tour", "logline": "A 360-degree video of the gate.",
+                      "format": "reel", "why": "Rare 360 footage.", "shots": [trip[0]], "tags": []},
+                     {"moment_id": "m:2024-05-25", "title": "existing idea", "logline": "", "format": "short", "why": "", "shots": [], "tags": []}]
+            return {"message": {"content": json.dumps({"ideas": ideas})}}
+        with patch("frameatlas.ideas.local_models", return_value=["qwen3:8b"]), \
+                patch("frameatlas.resources.gpu_lease", return_value=contextlib.nullcontext()), \
+                patch("frameatlas.ollama_local.request_json", side_effect=reply):
+            items = self.service.dispatch("idea_pad_generate", {"count": 2})["items"]
+        self.assertEqual([(i["title"], i["logline"], i["basis"]["why"]) for i in items],
+                         [("Departures: A Tour", "A video of the gate.", "Rare footage.")])
+        moment = sent[0]["moments"][0]
+        self.assertFalse(moment["has_360_footage"])
+        summary = moment["samples"][0]["summary"]
+        self.assertTrue(summary.endswith(" …") and len(summary) <= 222 and "Amsterdam" in summary)
+        self.assertNotIn("xxxx x", summary)
+        self.assertTrue(all(len(w) == len(w.strip()) for w in summary.split()))
+
+    def test_a_small_library_still_has_moments(self):
+        self.add_day("2024-05-25", 3, "a-", summary="A park")
+        self.add_day("2024-06-01", 1, "b-", summary="A single photo")
+        self.assertEqual([m["id"] for m in idea_pad.moments(self.store)["moments"]], ["m:2024-05-25"])
+        self.assertEqual(idea_pad.moments(Store(Path(self.tmp.name) / "empty"))["moments"], [])
+
+    def test_leap_day_anniversary_falls_on_feb_28(self):
+        self.add_day("2024-02-29", 3, "leap-", summary="Leap day")
+        self.add_day("2024-06-01", 1, "b-", summary="Other")
+        got = idea_pad.moments(self.store, today=date(2027, 2, 20))["moments"][0]
+        self.assertEqual((got["id"], got["anniversary"]), ("m:2024-02-29", "3 years ago this month"))
+        self.assertEqual(idea_pad.moments(self.store, today=date(2028, 2, 20))["moments"][0]["anniversary"], "4 years ago this month")
+
+    def test_missing_model_message_names_what_is_installed(self):
+        with patch("frameatlas.ideas.local_models", return_value=["phi4-mini:latest"]):
+            with self.assertRaisesRegex(ValueError, r"qwen3:8b is not installed in Ollama\. Installed: phi4-mini:latest\."):
+                self.service.dispatch("idea_pad_generate", {"model": "qwen3:8b"})
+
+    def test_list_counts_may_come_from_a_query_string(self):
+        for k in range(3):
+            self.service.dispatch("idea_pad_add", {"title": f"Idea {k}"})
+        page = self.service.dispatch("idea_pad", {"limit": "2", "offset": "1"})
+        self.assertEqual((len(page["items"]), page["total"]), (2, 3))
+        for bad in ("-1", "2.5", "１", "99999999999", "x", True):
+            with self.assertRaises(ValueError):
+                self.service.dispatch("idea_pad", {"limit": bad})
+
+    def test_add_refuses_unknown_fields(self):
+        for extra in ({"origin": "generated"}, {"basis": {}}, {"model": "x"}, {"id": 3}):
+            with self.assertRaisesRegex(ValueError, "Unknown idea field"):
+                self.service.dispatch("idea_pad_add", {"title": "a", **extra})
 
     def test_malformed_model_reply_saves_nothing(self):
         self.add_day("2024-05-25", 8, "trip-", summary="A beach")

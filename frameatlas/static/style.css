@@ -59,3 +59,4 @@ button.match:hover{text-decoration:underline}
 .idea-notes-label{display:block}.idea-notes{width:100%;margin-top:3px;font-size:12px}
 .idea-card-bottom{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:auto}.idea-card-bottom .danger{color:#a33;margin-left:auto}
 .idea-coverage strong{font-size:22px}.facts-line{margin-top:-4px}
+.idea-more{display:block;margin:-24px auto 40px}
