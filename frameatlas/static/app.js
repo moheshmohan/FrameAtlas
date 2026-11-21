@@ -521,6 +521,7 @@ function setupAnalysis(){
 async function handleDetailClick(e){
  if(e.target===$('#detail')){$('#detail').close();return}
  const chip=e.target.closest('[data-person-open]');if(chip){$('#detail').close();await openPerson(Number(chip.dataset.personOpen));return}
+ const unlinked=e.target.closest('[data-face-link]');if(unlinked){await linkDetailFace(Number(unlinked.dataset.faceLink));return}
  if(e.target.closest('#retry-speech')){const a=currentAsset;openAnalysis([a.id],{replace:a.analysis.speech_status==='complete',language:a.analysis.speech?.language,model:a.analysis.speech_model});return}
  const copy=e.target.closest('[data-copy-clip],[data-copy-speech],[data-prepare-clip],[data-prepare-speech]');
  if(copy){

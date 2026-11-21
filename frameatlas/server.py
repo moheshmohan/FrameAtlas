@@ -14,7 +14,9 @@ from .worker import Worker, WorkerBusy
 STATIC = Path(__file__).parent / "static"
 READ_ACTIONS = {"search", "asset", "coverage", "stats", "jobs", "job", "resolve", "models", "idea_history",
                 "picker_sessions", "picker_queued_items", "picker_reselection", "compare_sources",
-                "idea_pad", "idea_pad_moments", "metadata_coverage", "people", "person", "people_status"}
+                "idea_pad", "idea_pad_moments", "metadata_coverage", "people", "person", "people_status",
+                "faces_unsorted", "people_suggest",
+                "people_review", "people_compare"}
 
 
 def serve(root=DATA, port=7318):

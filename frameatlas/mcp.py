@@ -48,11 +48,20 @@ TOOLS = [
     ("people_status", "Read the face index: previews scanned, faces found and grouped, people and named people, and the running scan's progress.", "people_status", {}),
     ("people_scan", "Start the local face scan of stored previews (YuNet + AuraFace on the GPU), then group faces into people. Runs in the background; read people_status.", "people_scan", {}),
     ("people_regroup", "Regroup every face into people, keeping names, confirmed faces and removals.", "people_regroup", {}),
-    ("people_list", "List people found in the media: id, name, how many faces and items, first and last seen, cover crop. Hidden people (passers-by) only with include_hidden; named_only for named people.", "people", {"include_hidden": {"type": "boolean"}, "named_only": {"type": "boolean"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}, "offset": {"type": "integer", "minimum": 0}}),
+    ("people_list", "List people found in the media: id, name, how many faces and items, first and last seen, cover crop. Hidden people (passers-by) only with include_hidden; named_only for named people; query searches names (or #id).", "people", {"include_hidden": {"type": "boolean"}, "named_only": {"type": "boolean"}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}, "offset": {"type": "integer", "minimum": 0}, "query": STRING}),
     ("person_get", "Read one person and their faces (with item IDs, filenames, capture times). Use catalog_search with person=<id> for their media.", "person", {"id": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}, "offset": {"type": "integer", "minimum": 0}}),
     ("person_update", "Name a person, hide or show them, or keep notes about them.", "person_update", {"id": {"type": "integer", "minimum": 1}, "name": STRING, "hidden": {"type": "boolean"}, "notes": STRING}),
     ("person_merge", "Merge two people who are the same person: every face of other moves to into.", "person_merge", {"into": {"type": "integer", "minimum": 1}, "other": {"type": "integer", "minimum": 1}}),
     ("face_assign", "Correct one face: give person to put it with that person, omit person to take it away from its person (it will not go back), or new_person to start a new person with it.", "face_assign", {"face": {"type": "integer", "minimum": 1}, "person": {"type": "integer", "minimum": 1}, "new_person": {"type": "boolean"}}),
+    ("faces_link", "Link faces to a person (confirmed: regrouping keeps them there), or with new_person (and an optional name) to a new person. Faces moved away from another person never go back to them.", "faces_link", {"faces": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 500}, "person": {"type": "integer", "minimum": 1}, "new_person": {"type": "boolean"}, "name": STRING}),
+    ("faces_unlink", "Take faces away from their people; regrouping never puts them back with those people.", "faces_unlink", {"faces": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 500}}),
+    ("faces_unsorted", "List faces with no person (passers-by and faces grouping was unsure of), clearest first, with item IDs and crops.", "faces_unsorted", {"limit": {"type": "integer", "minimum": 1, "maximum": 300}, "offset": {"type": "integer", "minimum": 0}}),
+    ("people_suggest", "The people some faces most look like (likeness 0-1), to link them to the right person.", "people_suggest", {"faces": {"type": "array", "items": {"type": "integer", "minimum": 1}, "minItems": 1, "maxItems": 64}, "limit": {"type": "integer", "minimum": 1, "maximum": 30}}),
+    ("people_autosort", "Sort faces on their own in the background (read people_status): merge people whose faces are clearly one person (likeness >= 0.8), link unsorted faces that clearly belong to someone, and queue less certain merges, links, moves and unlinks for review. Without apply nothing changes; everything is proposed. Never touches faces the owner confirmed or pairs already turned down. To sort as an agent: run it, read people_review, look at each proposal with people_compare (it returns the face images), then people_review_decide apply or dismiss.", "people_autosort", {"apply": {"type": "boolean"}}),
+    ("people_review", "Read the sorting log: proposed changes waiting for a decision (default) or applied ones (which can be undone), with likeness, face and person crops. actor is auto, agent or google; action is link, move, unlink, merge or name.", "people_review", {"status": {"type": "string", "enum": ["proposed", "applied", "undone", "dismissed", ""]}, "actor": {"type": "string", "enum": ["", "auto", "agent", "google"]}, "action": {"type": "string", "enum": ["", "link", "move", "unlink", "merge", "name"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}, "offset": {"type": "integer", "minimum": 0}}),
+    ("people_review_decide", "Decide on one sorting log entry: apply a proposal, dismiss it (it is not proposed again), or undo an applied change.", "people_review_decide", {"id": {"type": "integer", "minimum": 1}, "decision": {"type": "string", "enum": ["apply", "dismiss", "undo"]}}),
+    ("people_compare", "Look at faces: returns a person's clearest face crops as images next to another person's (with their fingerprint likeness), or next to given faces. Use it to judge merges and links by eye.", "people_compare", {"person": {"type": "integer", "minimum": 1}, "other": {"type": "integer", "minimum": 1}, "faces": {"type": "array", "items": {"type": "integer", "minimum": 1}, "maxItems": 12}, "count": {"type": "integer", "minimum": 1, "maximum": 12}}),
+    ("people_import_names", "Name people after another library's named people (for example Google Photos' People & pets): give each name with its items' local capture times (YYYY-MM-DDTHH:MM:SS, no time zone) and kind (photo or video). Items are matched to the catalogue, the person seen in the largest share of a name's items gets the name (owner names are never replaced), and split groups of the same person are merged when their faces agree. Without apply, everything is proposed.", "people_import_names", {"source": STRING, "people": {"type": "array", "maxItems": 2000, "items": {"type": "object"}}, "apply": {"type": "boolean"}}),
     ("catalog_annotate", "Correct generated summary or tags; changes are local to the catalogue.", "annotate", {"id": STRING, "summary": STRING, "tags": {"type": "array", "items": STRING}}),
     ("catalog_correct_scene", "Correct a scene caption while preserving model output. Send the scene_key from catalog_asset with the ordinal to reject a stale edit if reanalysis changed the scene.", "correct_scene", {"id": STRING, "ordinal": {"type": "integer"}, "caption": STRING, "scene_key": STRING}),
     ("catalog_import_native", "Import metadata only from existing FilmCraft Photos selections and local Studio inventory. Does not scan either entire cloud.", "import_native", {}),
@@ -95,11 +104,29 @@ def handle(service, message):
             if not isinstance(args, dict) or set(args) - set(tool[3]):
                 raise ValueError("Invalid arguments")
             result = service.dispatch(tool[2], args)
-            content = {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}], "isError": False}
+            content = {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}] + face_images(service, result), "isError": False}
         except Exception as exc:
             content = {"content": [{"type": "text", "text": str(exc)[:1500]}], "isError": True}
         return {"jsonrpc": "2.0", "id": rid, "result": content}
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "Method not found"}}
+
+
+def face_images(service, result):
+    """Face crops a tool named in its result, as images an agent can look at (labelled in order)."""
+    import base64, re
+    from .people import crops_dir
+    out = []
+    if not isinstance(result, dict) or not isinstance(result.get("images"), list):
+        return out
+    root = crops_dir(service.store)
+    for item in result["images"][:30]:
+        crop = item.get("crop", "") if isinstance(item, dict) else ""
+        path = root / crop
+        if not re.fullmatch(r"[0-9]{1,12}\.jpg", crop) or path.is_symlink() or not path.is_file() or path.stat().st_size > 2_000_000:
+            continue
+        out.append({"type": "text", "text": str(item.get("label", ""))[:120]})
+        out.append({"type": "image", "data": base64.b64encode(path.read_bytes()).decode(), "mimeType": "image/jpeg"})
+    return out
 
 
 def main():

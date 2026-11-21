@@ -189,7 +189,27 @@ M-series Mac); items analysed from their originals get full-resolution faces (th
 frames spread over a video), which replace the preview's.
 
 - Name a person on their card; names survive regrouping. Select two cards to merge them.
-- Open a person to remove faces that are someone else: a removed face never goes back to them.
+- Open a person to correct them: select faces and **Link to another person…** (or a new person) or
+  **Unlink** them; a face moved or unlinked never goes back to that person. **Merge with…** joins
+  two people who are the same person. The picker suggests the people the faces look most like.
+- **Unsorted faces** lists the faces that belong to no one yet (passers-by, faces the grouping
+  was unsure of): select some and link them to a person. In an item's details, a face marked
+  **Who is this?** links the same way.
+- **To review** is the sorter's desk. **Sort automatically** merges people whose faces are clearly
+  one person (fingerprint likeness 0.8 or more; two different names are never merged on their own)
+  and links unsorted faces that clearly belong to someone; less certain merges, links, moves and
+  unlinks wait there for a yes or no. **Find suggestions** only proposes. Faces you confirmed are
+  never touched, a "no" is not asked again, and every change can be undone.
+- Names from **Google Photos' People & pets** can be brought over: each named person's photos are
+  matched to the catalogue by their local capture time (to the second, the time zone found by
+  trying every quarter-hour offset) and kind, and the person seen in most of them gets the name.
+  Names you gave are never replaced (a different Google name is only proposed), and groups that
+  turn out to be the same Google person are merged when their faces agree.
+
+Agents sort faces the same way: `people_autosort` (propose, or `apply`), `people_review`,
+`people_review_decide` (apply, dismiss, undo), and `people_compare`, which returns the face crops
+as images so a model that can see can judge a merge or a link by eye. `people_import_names` takes
+another library's named people as `{name, items: [{kind, local}]}`.
 - **Hide** a passer-by without deleting anything. Groups of fewer than three faces get no person.
 - **Media →** opens the Library filtered to that person; MCP's `catalog_search` takes `person`
   (one ID, or several for items with all of them). Named people appear in the Idea Pad's moments
@@ -198,7 +218,9 @@ frames spread over a video), which replace the preview's.
   People page (or the `people_forget` action) removes every face, person and correction.
 
 MCP tools: `people_status`, `people_scan`, `people_regroup`, `people_list`, `person_get`,
-`person_update`, `person_merge`, `face_assign`. From a terminal: `python3 -m frameatlas.people scan`.
+`person_update`, `person_merge`, `face_assign`, `faces_link`, `faces_unlink`, `faces_unsorted`,
+`people_suggest`, `people_autosort`, `people_review`, `people_review_decide`, `people_compare`,
+`people_import_names`. From a terminal: `python3 -m frameatlas.people scan`, `group` or `sort [--apply]`.
 
 ### Capture metadata: when, where, with what
 

@@ -22,13 +22,13 @@ def scan_running(store):
         return True
 
 
-def start_scan(store, action):
-    """Start the face scan (or a regroup) as its own process; it holds the scan lock."""
+def start_scan(store, action, extra=()):
+    """Start the face scan (or a regroup, or a sort) as its own process; it holds the scan lock."""
     import subprocess, sys
     if scan_running(store):
         return {"started": False, "running": True}
     log = open(Path(store.root) / "face-scan.log", "a")
-    subprocess.Popen([sys.executable, "-m", "frameatlas.people", action], cwd=str(Path(__file__).resolve().parent.parent),
+    subprocess.Popen([sys.executable, "-m", "frameatlas.people", action, *extra], cwd=str(Path(__file__).resolve().parent.parent),
                      stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
                      env={**os.environ, "FRAMEATLAS_DATA": str(store.root)})
     log.close()
@@ -74,7 +74,7 @@ class Service:
         if action == "people":
             flag = lambda k: args.get(k) in (True, "true")
             return people.list_people(self.store, include_hidden=flag("include_hidden"), named_only=flag("named_only"),
-                                      limit=args.get("limit", 200), offset=args.get("offset", 0))
+                                      limit=args.get("limit", 200), offset=args.get("offset", 0), query=args.get("query", ""))
         if action == "person":
             return people.person(self.store, args.get("id"), limit=args.get("limit", 60), offset=args.get("offset", 0))
         if action == "person_update":
@@ -88,6 +88,52 @@ class Service:
             if not isinstance(args.get("new_person", False), bool):
                 raise ValueError("new_person must be true or false")
             return people.assign_face(self.store, args.get("face"), args.get("person"), new_person=args.get("new_person", False))
+        if action == "faces_link":
+            if set(args) - {"faces", "person", "new_person", "name"}:
+                raise ValueError("Link with: faces, person or new_person, name")
+            if not isinstance(args.get("new_person", False), bool):
+                raise ValueError("new_person must be true or false")
+            return people.link_faces(self.store, args.get("faces"), args.get("person"),
+                                     new_person=args.get("new_person", False), name=args.get("name", ""))
+        if action == "faces_unlink":
+            if set(args) - {"faces"}:
+                raise ValueError("Unlink with: faces")
+            return people.unlink_faces(self.store, args.get("faces"))
+        if action == "faces_unsorted":
+            if set(args) - {"limit", "offset"}:
+                raise ValueError("List with: limit, offset")
+            return people.unsorted_faces(self.store, limit=args.get("limit", 120), offset=whole(args.get("offset", 0)))
+        if action == "people_suggest":
+            if set(args) - {"faces", "limit"}:
+                raise ValueError("Suggest with: faces, limit")
+            faces = args.get("faces")
+            if isinstance(faces, str):
+                faces = [f for f in faces.split(",") if f.strip()]
+            return people.suggest(self.store, faces, limit=args.get("limit", 8))
+        if action == "people_autosort":
+            if set(args) - {"apply"} or not isinstance(args.get("apply", False), bool):
+                raise ValueError("Sort with: apply (true or false)")
+            return start_scan(self.store, "sort", ["--apply"] if args.get("apply") else [])
+        if action == "people_review":
+            if set(args) - {"status", "actor", "action", "limit", "offset"}:
+                raise ValueError("Review with: status, actor, action, limit, offset")
+            return people.review(self.store, status=args.get("status", "proposed"), actor=args.get("actor", ""),
+                                 action=args.get("action", ""), limit=args.get("limit", 50), offset=args.get("offset", 0))
+        if action == "people_review_decide":
+            if set(args) - {"id", "decision"}:
+                raise ValueError("Decide with: id, decision")
+            return people.decide(self.store, args.get("id"), args.get("decision"))
+        if action == "people_compare":
+            if set(args) - {"person", "other", "faces", "count"}:
+                raise ValueError("Compare with: person, other or faces, count")
+            faces = args.get("faces")
+            if isinstance(faces, str):
+                faces = [f for f in faces.split(",") if f.strip()]
+            return people.compare(self.store, args.get("person"), args.get("other"), faces, n=args.get("count", 6))
+        if action == "people_import_names":
+            if set(args) - {"source", "people", "apply"} or not isinstance(args.get("apply", False), bool):
+                raise ValueError("Import with: source, people, apply")
+            return people.import_names(self.store, args.get("source", "google_photos"), args.get("people"), apply=args.get("apply", False))
         if action == "people_forget":
             if args.get("confirm") is not True:
                 raise ValueError("Pass confirm: true to delete every face and person")
