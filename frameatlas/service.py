@@ -5,6 +5,8 @@ import time
 from urllib.parse import quote
 
 from . import importers, ideas
+from . import idea_pad, metadata as capture_info
+from .metadata import picker_camera
 from .worker import broker, resolve, Cache, ANALYSIS_RESERVE
 
 
@@ -30,7 +32,28 @@ class Service:
                 asset["citation_match"] = resolve_citation(
                     asset["scenes"], args.get("start"), args.get("end"), args.get("sample_time"),
                     args.get("scene_key", ""), args.get("part_filename", ""))
+            asset["facts"] = capture_info.facts(asset)
             return asset
+        if action == "metadata_coverage":
+            return capture_info.coverage(self.store)
+        if action == "metadata_backfill":
+            return capture_info.backfill(self.store)
+        if action == "idea_pad":
+            return idea_pad.list_ideas(self.store, args.get("status", ""), args.get("origin", ""),
+                                       args.get("limit", 200), args.get("offset", 0))
+        if action == "idea_pad_add":
+            fields = {k: args[k] for k in ("logline", "notes", "format", "tags", "status", "asset_ids") if k in args}
+            return idea_pad.add(self.store, args.get("title"), **fields)
+        if action == "idea_pad_update":
+            return idea_pad.update(self.store, args.get("id"), **{k: v for k, v in args.items() if k != "id"})
+        if action == "idea_pad_delete":
+            return idea_pad.delete(self.store, args.get("id"))
+        if action == "idea_pad_moments":
+            return idea_pad.moments(self.store, args.get("since", ""), args.get("until", ""), args.get("limit", 40))
+        if action == "idea_pad_generate":
+            return idea_pad.generate(self.store, args.get("model", ""), args.get("count", 5),
+                                     args.get("since", ""), args.get("until", ""), args.get("focus", ""),
+                                     args.get("include_used", False))
         if action == "coverage":
             return self.store.coverage(args.get("provider", ""), args.get("limit", 24), args.get("offset", 0),
                                        kind=args.get("kind", ""))
@@ -179,7 +202,8 @@ class Service:
                     aid, new = self.store.upsert({"provider": "google_photos", "source_id": p["id"], "filename": p["filename"],
                         "kind": p["kind"], "captured": p.get("created", ""),
                         "locator": {"picker_id": p["id"], "session_id": session, "filename": p["filename"]},
-                        "metadata": {"inventory": "Google Picker selection", "gps_status": "not_provided_by_picker", "mime_type": p.get("mimeType")}}, db)
+                        "metadata": {"inventory": "Google Picker selection", "gps_status": "not_provided_by_picker", "mime_type": p.get("mimeType"),
+                                     **picker_camera(p.get("capture"))}}, db)
                     added += int(new); ids.append(aid)
                 self.store.imported("google_photos", "Picker selection", "Only items deliberately selected in this Picker session; no library-wide scan.", len(ids), db)
                 dates=[]

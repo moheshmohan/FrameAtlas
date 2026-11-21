@@ -13,7 +13,8 @@ from .worker import Worker, WorkerBusy
 
 STATIC = Path(__file__).parent / "static"
 READ_ACTIONS = {"search", "asset", "coverage", "stats", "jobs", "job", "resolve", "models", "idea_history",
-                "picker_sessions", "picker_queued_items", "picker_reselection", "compare_sources"}
+                "picker_sessions", "picker_queued_items", "picker_reselection", "compare_sources",
+                "idea_pad", "idea_pad_moments", "metadata_coverage"}
 
 
 def serve(root=DATA, port=7318):
@@ -86,7 +87,7 @@ def serve(root=DATA, port=7318):
                     else:
                         self.reply(p.read_bytes(), mime="image/jpeg")
                 else:
-                    files = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8")}
+                    files = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8"), "/ideapad.js": ("ideapad.js", "text/javascript; charset=utf-8")}
                     if path not in files:
                         self.reply({"error": "Not found"}, 404)
                         return

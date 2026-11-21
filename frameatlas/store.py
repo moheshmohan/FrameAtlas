@@ -261,6 +261,11 @@ class Store:
               coverage TEXT NOT NULL, count INTEGER NOT NULL, created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS ideas (id INTEGER PRIMARY KEY, prompt TEXT, result TEXT, created REAL);
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS idea_pad (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, logline TEXT NOT NULL DEFAULT '',
+              notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'idea', format TEXT NOT NULL DEFAULT 'other',
+              tags TEXT NOT NULL DEFAULT '[]', origin TEXT NOT NULL DEFAULT 'manual', basis TEXT NOT NULL DEFAULT '{}',
+              model TEXT NOT NULL DEFAULT '', created REAL NOT NULL, updated REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS picker_sessions (
               id TEXT PRIMARY KEY, expires TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
               selected_count INTEGER NOT NULL DEFAULT 0, added_count INTEGER NOT NULL DEFAULT 0,

@@ -43,6 +43,9 @@ pub struct Item {
     pub mime_type: String,
     pub base_url: String,
     pub video_status: Option<String>,
+    /// What Google reports about the capture: camera make and model, picture size, frame rate.
+    /// Google strips the position from its downloads and does not report it here either.
+    pub capture: Value,
 }
 pub struct GooglePhotos {
     token: String,
@@ -247,7 +250,51 @@ fn selected_item(v: &Value) -> Result<Item, Error> {
             .pointer("/mediaFileMetadata/videoMetadata/processingStatus")
             .and_then(Value::as_str)
             .map(str::to_string),
+        capture: capture_metadata(file),
     })
+}
+
+/// The camera fields of a Picker `mediaFileMetadata`, bounded: text trimmed to 120 characters,
+/// numbers kept only when finite, positive and plausible.
+fn capture_metadata(file: &Value) -> Value {
+    let Some(meta) = file.get("mediaFileMetadata") else {
+        return json!({});
+    };
+    let mut out = serde_json::Map::new();
+    for (from, to) in [("cameraMake", "make"), ("cameraModel", "model")] {
+        let value: String = text(meta, from).trim().chars().take(120).collect();
+        if !value.is_empty() {
+            out.insert(to.into(), Value::String(value));
+        }
+    }
+    let number = |v: Option<&Value>, max: f64| {
+        v.and_then(Value::as_f64)
+            .filter(|n| n.is_finite() && *n > 0.0 && *n <= max)
+    };
+    for (key, max) in [("width", 200_000.0), ("height", 200_000.0)] {
+        if let Some(n) = number(meta.get(key), max) {
+            out.insert(key.into(), json!(n.round() as u64));
+        }
+    }
+    if let Some(fps) = number(meta.pointer("/videoMetadata/fps"), 2_000.0) {
+        out.insert("fps".into(), json!(fps));
+    }
+    if let Some(photo) = meta.get("photoMetadata") {
+        if let Some(n) = number(photo.get("focalLength"), 10_000.0) {
+            out.insert("focal_length_mm".into(), json!(n));
+        }
+        if let Some(n) = number(photo.get("apertureFNumber"), 1_000.0) {
+            out.insert("aperture_f".into(), json!(n));
+        }
+        if let Some(n) = number(photo.get("isoEquivalent"), 10_000_000.0) {
+            out.insert("iso".into(), json!(n.round() as u64));
+        }
+        let exposure: String = text(photo, "exposureTime").chars().take(32).collect();
+        if !exposure.is_empty() {
+            out.insert("exposure".into(), Value::String(exposure));
+        }
+    }
+    Value::Object(out)
 }
 
 struct PageCursor {
@@ -368,12 +415,29 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, SelectionItems, read_pages};
+    use super::{Error, SelectionItems, read_pages, selected_item};
     use serde_json::{Value, json};
 
     fn item(id: &str) -> Value {
         json!({"id":id,"type":"PHOTO","createTime":"2025-12-01T12:00:00Z",
                "mediaFile":{"filename":format!("{id}.jpg"),"baseUrl":"https://lh3.googleusercontent.com/fixture","mimeType":"image/jpeg"}})
+    }
+
+    #[test]
+    fn selected_item_keeps_bounded_camera_metadata() -> Result<(), Error> {
+        let v = json!({"id":"p","type":"PHOTO","createTime":"2024-07-01T18:30:00Z",
+            "mediaFile":{"filename":"IMG_1.HEIC","baseUrl":"https://lh3.googleusercontent.com/x","mimeType":"image/heic",
+              "mediaFileMetadata":{"width":4032,"height":3024,"cameraMake":"Apple","cameraModel":"iPhone 15 Pro",
+                "photoMetadata":{"focalLength":6.86,"apertureFNumber":1.78,"isoEquivalent":50,"exposureTime":"0.008s"}}}});
+        let item = selected_item(&v)?;
+        assert_eq!(item.capture, json!({"make":"Apple","model":"iPhone 15 Pro","width":4032,"height":3024,
+            "focal_length_mm":6.86,"aperture_f":1.78,"iso":50,"exposure":"0.008s"}));
+        let hostile = json!({"id":"v","type":"VIDEO","mediaFile":{"filename":"v.mp4",
+            "mediaFileMetadata":{"width":-1,"height":"tall","cameraMake":"  ","videoMetadata":{"fps":1e308}}}});
+        assert_eq!(selected_item(&hostile)?.capture, json!({}));
+        let bare = json!({"id":"b","type":"PHOTO","mediaFile":{"filename":"b.jpg"}});
+        assert_eq!(selected_item(&bare)?.capture, json!({}));
+        Ok(())
     }
 
     #[test]

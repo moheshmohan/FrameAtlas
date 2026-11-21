@@ -533,7 +533,7 @@ fn run(args: &[String]) -> Result<Value, Error> {
             if !s.media_items_set {
                 return Ok(json!({"ready":false,"items":[]}));
             }
-            let items: Vec<Value> = photos.picked_items(session)?.iter().map(|i| json!({"id":i.id,"filename":i.filename,"kind":i.kind.as_str(),"created":i.created,"mimeType":i.mime_type})).collect();
+            let items: Vec<Value> = photos.picked_items(session)?.iter().map(|i| json!({"id":i.id,"filename":i.filename,"kind":i.kind.as_str(),"created":i.created,"mimeType":i.mime_type,"capture":i.capture})).collect();
             Ok(json!({"ready":true,"items":items,"session":session}))
         }
         "delete" => {

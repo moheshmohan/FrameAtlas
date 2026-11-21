@@ -150,6 +150,37 @@ to run the restored web app. Checksums detect accidental corruption, not malicio
 - Responsive browser interface, JSON metadata export, source provenance, import coverage and storage use.
 - Stdio MCP tools use the same implementation as the UI. See `.mcp.json`.
 
+### Idea Pad
+
+**Idea Pad** (in the sidebar) keeps video ideas in the catalogue. Write one down (title, one line,
+notes, format, tags), or press **Generate ideas** and a local writing model (Qwen3 8B or Phi-4
+Mini through the loopback Ollama service, whichever is installed) proposes some from your library.
+
+Generation starts from *moments* that the metadata shows: days or runs of days with far more
+footage than usual, days with 360 recordings or several videos, and days whose anniversary comes
+up in the next three weeks. Each moment carries its counts, devices, places, tags and a few
+analysed items' descriptions. The model picks a moment, writes a title, a logline and why it is
+worth making now, and chooses shots from that moment only. Every generated idea keeps its moment
+and linked shots, so **Footage from these days →** opens them in the Library. Moments that already
+have a generated idea are skipped next time unless you include them. Set a date range or a focus
+(for example `360` or `beach`) to steer it. Ideas move through idea → planned → shooting → editing
+→ published (or dropped); titles and notes are edited in place.
+
+### Capture metadata: when, where, with what
+
+An item's detail shows its weekday and time, camera, place and picture size, and **What the
+library knows** on the Idea Pad shows how much of the catalogue has each:
+
+- **Date and time** come from Google's capture time, camera filenames, Takeout or the file. Times
+  with a zone are shown in this Mac's zone; times without one are the camera's clock.
+- **Camera** (make and model) is recorded from Google's Picker for items picked from now on;
+  earlier picks get it when they are selected again. Insta360 inventories record the camera model.
+- **Device guesses** come from filename patterns (`IMG_1234.HEIC` → iPhone, `IMG-…-WA…` →
+  WhatsApp, `DSC_…` → Nikon, `.insv` → Insta360 and so on) and are always labelled as guesses.
+- **Place**: Google removes positions from Picker downloads and the Picker does not report them,
+  so Google items get a place only from a linked Google Takeout record. Local video originals are
+  read for embedded GPS (`python3 -m frameatlas.cli metadata-backfill` checks any never read).
+
 ## Offline boundary
 
 **All media inference runs on this Mac.** FilmCraft does the decode, cuts, descriptions and speech
@@ -604,7 +635,9 @@ Use `.mcp.json` in an MCP-capable client, or configure:
 MCP queues share the same database. Keep `./run.sh serve` or the separate `./run.sh worker` running
 for processing. Tool names include
 `catalog_search`, `catalog_asset`, `catalog_analyze`, `catalog_jobs`, `catalog_resolve`,
-`catalog_correct_scene`, `catalog_ideas`, `catalog_import_takeout`, and `catalog_picker_create`.
+`catalog_correct_scene`, `catalog_ideas`, `catalog_import_takeout`, `catalog_picker_create`,
+`catalog_metadata_coverage`, and the Idea Pad tools `idea_pad_list`, `idea_pad_add`,
+`idea_pad_update`, `idea_pad_delete`, `idea_pad_moments` and `idea_pad_generate`.
 `catalog_search` exposes `limit` (1–200) and `offset` for paging through the whole known inventory.
 
 ```sh
@@ -612,6 +645,9 @@ for processing. Tool names include
 python3 -m frameatlas.cli search "hotel"
 python3 -m frameatlas.cli import-takeout /path/to/takeout.zip
 python3 -m frameatlas.cli stats
+python3 -m frameatlas.cli metadata-coverage
+python3 -m frameatlas.cli ideas-generate --count 5 --since 2024-01-01 "360"
+python3 -m frameatlas.cli ideas
 ./run.sh test
 ```
 
