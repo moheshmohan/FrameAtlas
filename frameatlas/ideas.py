@@ -22,7 +22,7 @@ def pick(model, allowed):
         raise ValueError("Choose an already installed local writing model (" + ", ".join(allowed) + "). No models are downloaded by this app.")
     return model
 STORY_SEARCH_KEYS = ("query", "provider", "kind", "status", "category", "since", "until", "bounds",
-                     "capture_month", "filename", "source_access", "speech_state", "speech_only", "scene_only")
+                     "capture_month", "filename", "source_access", "speech_state", "speech_only", "scene_only", "person")
 
 
 def step_text(value):
@@ -278,5 +278,6 @@ def generate(store, prompt, model="", expand_search=False, *, asset_ids=None, se
     if expanded:
         result["related_search_phrases"] = expanded
     with store.connect() as db:
-        db.execute("INSERT INTO ideas(prompt,result,created) VALUES(?,?,strftime('%s','now'))", (prompt, json.dumps(result, ensure_ascii=False)))
+        result["run"] = db.execute("INSERT INTO ideas(prompt,result,created) VALUES(?,?,strftime('%s','now'))",
+                                   (prompt, json.dumps(result, ensure_ascii=False))).lastrowid
     return result

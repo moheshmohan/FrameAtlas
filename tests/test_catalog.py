@@ -284,6 +284,16 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(result['ideas'][0]['sources'][0]['reason'], 'Shows the room')
         self.assertEqual(result['ideas'][0]['pickups'], ['Exterior sign at dusk'])
         self.assertEqual(result['ideas'][0]['outline'], ['hotel.mov — Shows the room', 'PICKUP NEEDED: Exterior sign at dusk'])
+        # the story is on the Idea Pad too, with its cited edit sequence
+        pad = Service(self.store).dispatch('idea_pad', {'origin': 'story'})
+        self.assertEqual(pad['total'], 1)
+        story = pad['items'][0]
+        self.assertEqual(result['saved_ids'], [story['id']])
+        self.assertEqual((story['title'], story['logline'], story['format']), ('A stop for dinner', 'A meal away from home', 'story'))
+        self.assertEqual(story['basis']['sequence']['sources'][0]['start'], 2)
+        self.assertEqual(story['basis']['sequence']['pickups'], ['Exterior sign at dusk'])
+        self.assertEqual(story['basis']['sequence']['related_search_phrases'], ['hotel dining room'])
+        self.assertEqual([a['id'] for a in story['linked']], [self.aid])
 
     def test_scoped_story_uses_filtered_results_and_prioritizes_a_late_scene_match(self):
         local = self.root / "source.mov"
@@ -316,6 +326,9 @@ class CatalogTests(unittest.TestCase):
                 patch("frameatlas.resources.gpu_lease", return_value=contextlib.nullcontext()), \
                 patch("frameatlas.ideas.request_json", side_effect=reply):
             result = service.dispatch("ideas", {"prompt": "Use the sunrise clouds", "search_scope": scope})
+            # the Library's filters always carry person (empty when no one is chosen)
+            with_person = service.dispatch("ideas", {"prompt": "Use the sunrise clouds", "search_scope": {**scope, "person": ""}})
+            self.assertEqual(with_person["ideas"][0]["sources"][0]["start"], 70)
         self.assertEqual(result["search_scope"], scope)
         self.assertEqual(result["ideas"][0]["sources"][0]["start"], 70)
         with self.assertRaisesRegex(ValueError, "No matching media"):

@@ -55,6 +55,8 @@ def serve(root=DATA, port=7318):
                          "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "no-referrer",
                          "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'none'"}.items():
                 self.send_header(k, v)
+            if self.close_connection:
+                self.send_header("Connection", "close")
             self.end_headers()
             try:
                 self.wfile.write(body)
@@ -108,6 +110,9 @@ def serve(root=DATA, port=7318):
                 self.reply({"error": "Request failed safely. Check the local service and try again."}, 500)
 
         def do_POST(self):
+            # A request refused before its body is read leaves that body on a kept-alive connection,
+            # where it would be read as the start of the next request: close it instead.
+            self.close_connection = True
             if not self.allowed():
                 return
             if not secrets.compare_digest(self.headers.get("X-FrameAtlas-Token", ""), token):
@@ -119,7 +124,9 @@ def serve(root=DATA, port=7318):
                 size = int(self.headers.get("Content-Length", "0"))
                 if size < 0 or size > 8 * 1024 ** 2:
                     raise ValueError("Request exceeds the 8 MiB limit")
-                args = json.loads(self.rfile.read(size))
+                body = self.rfile.read(size)
+                self.close_connection = False
+                args = json.loads(body)
                 path = urlparse(self.path).path
                 if not path.startswith("/api/"):
                     raise ValueError("Unknown endpoint")

@@ -14,6 +14,10 @@ import time
 from .metadata import camera, device_hint, place, when
 
 STATUSES = ("idea", "planned", "shooting", "editing", "published", "dropped")
+# manual: written by the owner; generated: from a moment in the metadata; story: from a request
+# about footage (a Library selection, search or topic), with a cited edit sequence.
+ORIGINS = ("manual", "generated", "story")
+ADOPTED_KEY = "idea_pad_story_runs_adopted"
 FORMATS = ("short", "reel", "vlog", "story", "montage", "explainer", "anniversary", "other")
 # In order of preference when none is chosen: the best writer first.
 WRITING_MODELS = ("gemma3:12b", "maternion/spark-x2.6:4b-q6_k", "qwen3:8b", "phi4-mini:latest")
@@ -113,8 +117,8 @@ def _row(r):
 def list_ideas(store, status="", origin="", limit=200, offset=0):
     if status and status not in STATUSES:
         raise ValueError("Unknown idea status")
-    if origin and origin not in ("manual", "generated"):
-        raise ValueError("Origin must be manual or generated")
+    if origin and origin not in ORIGINS:
+        raise ValueError("Origin must be one of: " + ", ".join(ORIGINS))
     if type(limit) is not int or not 1 <= limit <= 500 or type(offset) is not int or not 0 <= offset <= 1_000_000:
         raise ValueError("Use a limit of 1–500 and a non-negative offset")
     clauses, args = [], []
@@ -123,11 +127,13 @@ def list_ideas(store, status="", origin="", limit=200, offset=0):
     if origin:
         clauses.append("origin=?"); args.append(origin)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    adopt_story_runs(store)
     with store.connect() as db:
         ensure(db)
         rows = db.execute(f"SELECT * FROM idea_pad{where} ORDER BY updated DESC, id DESC LIMIT ? OFFSET ?", (*args, limit, offset)).fetchall()
         total = db.execute(f"SELECT count(*) FROM idea_pad{where}", args).fetchone()[0]
         counts = dict(db.execute("SELECT status, count(*) FROM idea_pad GROUP BY status").fetchall())
+        origins = dict(db.execute("SELECT origin, count(*) FROM idea_pad GROUP BY origin").fetchall())
         items = [_row(r) for r in rows]
         wanted = list(dict.fromkeys(a for i in items for a in (i["basis"].get("asset_ids") or [])[:6]))
         found = {}
@@ -138,7 +144,7 @@ def list_ideas(store, status="", origin="", limit=200, offset=0):
                 found[a["id"]] = {"id": a["id"], "filename": a["filename"], "kind": a["kind"], "thumbnail": a["thumbnail"]}
     for item in items:
         item["linked"] = [found[a] for a in (item["basis"].get("asset_ids") or [])[:6] if a in found]
-    return {"items": items, "total": total, "counts": counts}
+    return {"items": items, "total": total, "counts": counts, "origins": origins}
 
 
 def add(store, title, logline="", notes="", format="other", tags=None, status="idea", asset_ids=None):
@@ -465,3 +471,118 @@ def generate(store, model="", count=5, since="", until="", focus="", include_use
     if not saved:
         raise ValueError("The local model proposed no usable ideas. Nothing was saved; try again or change the dates.")
     return {"items": saved, "model": model, "moments_considered": len(chosen), "offline": True}
+
+
+# ---- stories: ideas built from footage, each with an edit sequence citing indexed shots
+
+def _sequence(idea, result, run):
+    """The parts of a story idea the pad keeps: cited shots in editing order, pickup shots still
+    needed, and how it was asked for."""
+    sources = [s for s in idea.get("sources") or [] if isinstance(s, dict) and s.get("asset_id")]
+    seq = {"sources": sources, "pickups": [str(p) for p in idea.get("pickups") or []],
+           "model": result.get("model", ""), "run": run, "built": time.time()}
+    if not isinstance(idea.get("pickups"), list) and idea.get("outline"):  # explorations before pickups
+        seq["outline"] = [str(o) for o in idea["outline"]]
+    for key in ("related_search_phrases", "search_scope", "selected_asset_ids"):
+        if result.get(key):
+            seq[key] = result[key]
+    return seq
+
+
+def _shots(sources):
+    return list(dict.fromkeys(s["asset_id"] for s in sources))[:MAX_LINKED]
+
+
+def save_story(db, result, prompt, run, created=None):
+    """Put every idea of a story run on the pad (origin story) and return their ids."""
+    now = created or time.time()
+    saved = []
+    for idea in result.get("ideas") or []:
+        if not isinstance(idea, dict):
+            continue
+        title = " ".join(str(idea.get("title") or "").split())[:MAX_TITLE] or "Untitled story"
+        seq = _sequence(idea, result, run)
+        basis = {"prompt": str(prompt or "")[:2000], "sequence": seq, "asset_ids": _shots(seq["sources"]),
+                 "source": "Local scene descriptions and transcripts; check the cited shots before using claims in narration"}
+        cur = db.execute("""INSERT INTO idea_pad(title,logline,notes,status,format,tags,origin,basis,model,created,updated)
+            VALUES(?,?,'','idea','story','[]','story',?,?,?,?)""",
+            (title, _sentences(idea.get("hook"), 1000), json.dumps(basis, ensure_ascii=False), result.get("model", ""), now, now))
+        saved.append(cur.lastrowid)
+    return saved
+
+
+def adopt_story_runs(store):
+    """Once: bring the story explorations saved before the Idea Pad and Story ideas were one page
+    onto the pad, so none is lost. Runs before any new story is saved."""
+    with store.connect() as db:
+        if db.execute("SELECT 1 FROM settings WHERE key=?", (ADOPTED_KEY,)).fetchone():
+            return 0
+        ensure(db)
+        db.execute("BEGIN IMMEDIATE")
+        if db.execute("SELECT 1 FROM settings WHERE key=?", (ADOPTED_KEY,)).fetchone():
+            return 0
+        adopted = 0
+        for row in db.execute("SELECT id, prompt, result, created FROM ideas ORDER BY id").fetchall():
+            try:
+                result = json.loads(row["result"])
+            except (TypeError, ValueError):
+                continue
+            if isinstance(result, dict) and isinstance(result.get("ideas"), list):
+                try:
+                    created = float(row["created"] or 0) or None
+                except (TypeError, ValueError):
+                    created = None
+                adopted += len(save_story(db, result, row["prompt"], row["id"], created=created))
+        db.execute("INSERT INTO settings(key,value) VALUES(?,?)", (ADOPTED_KEY, json.dumps(adopted)))
+    return adopted
+
+
+def develop(store, idea_id, model=""):
+    """Build (or rebuild) an edit sequence for an idea from indexed footage: the idea's linked
+    analysed items when it has some, otherwise the days of its moment, otherwise a search of the
+    catalogue for its title and line."""
+    from . import ideas
+    if type(idea_id) is not int or idea_id < 1:
+        raise ValueError("Choose an idea")
+    adopt_story_runs(store)
+    with store.connect() as db:
+        ensure(db)
+        row = db.execute("SELECT * FROM idea_pad WHERE id=?", (idea_id,)).fetchone()
+        if row is None:
+            raise ValueError("Idea not found")
+        item = _row(row)
+        linked = item["basis"].get("asset_ids") or []
+        ready = [r[0] for r in db.execute(f"SELECT id FROM assets WHERE status IN ('ready','partial') AND id IN ({','.join('?' * len(linked))})", linked)] if linked else []
+    ready = [a for a in linked if a in set(ready)][:ideas.MAX_IDEA_ASSETS]
+    prompt = " ".join(x for x in (item["title"] + ".", item["logline"], item["notes"][:600]) if x.strip())
+    if item["basis"].get("prompt"):
+        prompt = item["basis"]["prompt"] + " " + prompt
+    moment = item["basis"].get("moment") or {}
+    if ready:
+        result = ideas.generate(store, prompt, model, asset_ids=ready)
+    else:
+        result = None
+        if moment.get("start") and moment.get("end"):
+            try:
+                result = ideas.generate(store, prompt, model, search_scope={"since": moment["start"], "until": moment["end"]})
+            except ValueError as error:
+                if "scene captions" not in str(error):
+                    raise
+        if result is None:
+            result = ideas.generate(store, prompt, model, expand_search=True)
+    best = result["ideas"][0]
+    seq = _sequence(best, result, result.get("run"))
+    if len(result["ideas"]) > 1:
+        seq["alternatives"] = [{"title": i["title"], "hook": i["hook"], **_sequence(i, result, result.get("run"))} for i in result["ideas"][1:]]
+    with store.connect() as db:
+        ensure(db)
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("SELECT basis FROM idea_pad WHERE id=?", (idea_id,)).fetchone()
+        if row is None:
+            raise ValueError("Idea not found")
+        basis = json.loads(row["basis"])
+        basis["sequence"] = seq
+        basis["asset_ids"] = list(dict.fromkeys([*(basis.get("asset_ids") or []), *_shots(seq["sources"])]))[:MAX_LINKED]
+        db.execute("UPDATE idea_pad SET basis=?, updated=? WHERE id=?", (json.dumps(basis, ensure_ascii=False), time.time(), idea_id))
+        return _row(db.execute("SELECT * FROM idea_pad WHERE id=?", (idea_id,)).fetchone())
+

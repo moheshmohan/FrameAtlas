@@ -267,10 +267,75 @@ class IdeaPadTests(unittest.TestCase):
                     self.service.dispatch("idea_pad_generate", {"model": "qwen3:8b"})
         self.assertEqual(self.service.dispatch("idea_pad", {})["total"], 0)
 
+    def test_earlier_story_explorations_move_onto_the_pad_once(self):
+        aid = self.add_day("2024-05-25", 1, "s-", summary="A beach")[0]
+        old_story = {"ideas": [{"title": "Beach walk", "hook": "Waves.", "outline": ["IMG_0000.HEIC — the sea"],
+                                "sources": [{"asset_id": aid, "filename": "IMG_0000.HEIC", "start": 0, "end": 2, "reason": "the sea"}]}],
+                     "model": "qwen3:8b"}
+        with self.store.connect() as db:
+            db.execute("INSERT INTO ideas(prompt,result,created) VALUES(?,?,?)", ("the beach", json.dumps(old_story), 1700000000))
+            db.execute("INSERT INTO ideas(prompt,result,created) VALUES('broken','not json',1)")
+            db.execute("INSERT INTO ideas(prompt,result,created) VALUES('odd',?,'x')", (json.dumps({"ideas": [{"title": "Odd"}]}),))
+        listed = self.service.dispatch("idea_pad", {})
+        self.assertEqual(listed["origins"], {"story": 2})
+        beach = next(i for i in listed["items"] if i["title"] == "Beach walk")
+        self.assertEqual((beach["origin"], beach["created"], beach["basis"]["prompt"]), ("story", 1700000000, "the beach"))
+        self.assertEqual(beach["basis"]["sequence"]["outline"], ["IMG_0000.HEIC — the sea"])
+        self.assertEqual(beach["basis"]["asset_ids"], [aid])
+        # deleting an adopted idea keeps it deleted: adoption happens only once
+        self.service.dispatch("idea_pad_delete", {"id": beach["id"]})
+        self.assertEqual(self.service.dispatch("idea_pad", {})["total"], 1)
+        self.assertEqual(self.service.dispatch("idea_pad", {"origin": "story"})["total"], 1)
+        with self.assertRaises(ValueError):
+            self.service.dispatch("idea_pad", {"origin": "elsewhere"})
+
+    def test_any_idea_can_grow_an_edit_sequence(self):
+        trip = self.add_day("2024-05-25", 3, "trip-", summary="A beach at sunset")
+        unanalysed = self.add_day("2024-06-01", 1, "raw-")
+        mine = self.service.dispatch("idea_pad_add", {"title": "Sunset", "logline": "Light on water", "asset_ids": [trip[1], unanalysed[0]]})
+        bare = self.service.dispatch("idea_pad_add", {"title": "Anything with robots"})
+        calls = []
+        def story(store, prompt, model="", expand_search=False, *, asset_ids=None, search_scope=None):
+            calls.append({"prompt": prompt, "model": model, "expand": expand_search, "ids": asset_ids, "scope": search_scope})
+            take = lambda t, at: {"title": t, "hook": "h", "pickups": ["A wide of the bay"],
+                                  "sources": [{"asset_id": trip[0], "filename": "IMG_0000.HEIC", "start": at, "end": at + 2, "reason": "open"}]}
+            return {"ideas": [take("Best", 1), take("Other", 5)], "model": "gemma3:12b", "run": 7}
+        with patch("frameatlas.ideas.generate", side_effect=story):
+            built = self.service.dispatch("idea_pad_develop", {"id": mine["id"], "model": "gemma3:12b"})
+            self.service.dispatch("idea_pad_develop", {"id": bare["id"]})
+        # its analysed linked items only, and the idea's own words as the request
+        self.assertEqual((calls[0]["ids"], calls[0]["scope"], calls[0]["model"]), ([trip[1]], None, "gemma3:12b"))
+        self.assertIn("Sunset. Light on water", calls[0]["prompt"])
+        self.assertTrue(calls[1]["expand"] and calls[1]["ids"] is None)
+        seq = built["basis"]["sequence"]
+        self.assertEqual((seq["sources"][0]["start"], seq["pickups"], seq["run"]), (1, ["A wide of the bay"], 7))
+        self.assertEqual([a["title"] for a in seq["alternatives"]], ["Other"])
+        self.assertEqual(built["basis"]["asset_ids"], [trip[1], unanalysed[0], trip[0]])
+        self.assertEqual((built["title"], built["origin"]), ("Sunset", "manual"))
+        for bad in ({"id": "1"}, {"id": 999}, {"id": mine["id"], "colour": "red"}):
+            with self.assertRaises(ValueError):
+                self.service.dispatch("idea_pad_develop", bad)
+
+    def test_a_moment_idea_develops_from_its_days_and_falls_back_to_a_search(self):
+        idea = {"title": "Beach day", "logline": "", "basis": {"moment": {"start": "2024-05-25", "end": "2024-05-26"}}}
+        with self.store.connect() as db:
+            idea_pad.ensure(db)
+            iid = db.execute("INSERT INTO idea_pad(title,origin,basis,created,updated) VALUES(?,?,?,1,1)",
+                             (idea["title"], "generated", json.dumps(idea["basis"]))).lastrowid
+        calls = []
+        def story(store, prompt, model="", expand_search=False, *, asset_ids=None, search_scope=None):
+            calls.append(search_scope or ("expand" if expand_search else None))
+            if search_scope:
+                raise ValueError("No matching media has scene captions. Analyse matching media or adjust the Library filters.")
+            return {"ideas": [{"title": "t", "hook": "h", "pickups": [], "sources": []}], "model": "m", "run": 1}
+        with patch("frameatlas.ideas.generate", side_effect=story):
+            self.service.dispatch("idea_pad_develop", {"id": iid})
+        self.assertEqual(calls, [{"since": "2024-05-25", "until": "2024-05-26"}, "expand"])
+
     def test_mcp_exposes_the_idea_pad(self):
         names = {t[0] for t in TOOLS}
         self.assertLessEqual({"idea_pad_list", "idea_pad_add", "idea_pad_update", "idea_pad_delete", "idea_pad_moments",
-                              "idea_pad_generate", "catalog_metadata_coverage", "catalog_metadata_backfill"}, names)
+                              "idea_pad_generate", "idea_pad_develop", "catalog_metadata_coverage", "catalog_metadata_backfill"}, names)
         reply = handle(self.service, {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                       "params": {"name": "idea_pad_add", "arguments": {"title": "From an agent"}}})
         self.assertIn("From an agent", json.dumps(reply))

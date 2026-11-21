@@ -127,7 +127,8 @@ to run the restored web app. Checksums detect accidental corruption, not malicio
   remains separately in provenance and does not replace editor corrections in scene search.
   If a scene moves during reanalysis, reopen the item before saving its caption. MCP clients can
   send the `scene_key` from `catalog_asset` alongside the ordinal to get the same stale-edit check.
-- Local Qwen3 8B / Ollama story brainstorming with source IDs and validated scene-time citations.
+- Local Ollama story brainstorming (the **From footage** way into **Ideas**) with source IDs and
+  validated scene-time citations. Every story lands on the Idea Pad with its edit sequence.
   Generated prose remains a draft: valid citations do not guarantee every claim is correct.
   New drafts use the validated citations as ordered edit steps and list optional pickup shots
   separately. MCP still returns an `outline` for text clients, built from the same steps.
@@ -150,22 +151,32 @@ to run the restored web app. Checksums detect accidental corruption, not malicio
 - Responsive browser interface, JSON metadata export, source provenance, import coverage and storage use.
 - Stdio MCP tools use the same implementation as the UI. See `.mcp.json`.
 
-### Idea Pad
+### Ideas (the Idea Pad)
 
-**Idea Pad** (in the sidebar) keeps video ideas in the catalogue. Write one down (title, one line,
-notes, format, tags), or press **Generate ideas** and a local writing model proposes some from
-your library: Gemma 3 12B (best writing), Spark-X2.6 4B (fast), Qwen3 8B or Phi-4 Mini through the
-loopback Ollama service; with none chosen, the best one installed.
+**Ideas** (in the sidebar) is one pad for every video idea, whichever way it started:
 
-Generation starts from *moments* that the metadata shows: days or runs of days with far more
-footage than usual, days with 360 recordings or several videos, and days whose anniversary comes
-up in the next three weeks. Each moment carries its counts, devices, places, tags and a few
-analysed items' descriptions. The model picks a moment, writes a title, a logline and why it is
-worth making now, and chooses shots from that moment only. Every generated idea keeps its moment
-and linked shots, so **Footage from these days →** opens them in the Library. Moments that already
-have a generated idea are skipped next time unless you include them. Set a date range or a focus
-(for example `360` or `beach`) to steer it. Ideas move through idea → planned → shooting → editing
-→ published (or dropped); titles and notes are edited in place.
+- **✎ Write one**: title, one line, notes, format and tags.
+- **✧ From moments**: a local writing model proposes ideas from *moments* the metadata shows:
+  days or runs of days with far more footage than usual, days with 360 recordings or several
+  videos, and days whose anniversary comes up in the next three weeks. Each moment carries its
+  counts, devices, places, named people, tags and a few analysed items' descriptions. The model
+  picks a moment, writes a title, a logline and why it is worth making now, and chooses shots from
+  that moment only; **Footage from these days →** opens them in the Library. Moments that already
+  have an idea are skipped next time unless you include them. Set a date range or a focus (for
+  example `360` or `beach`) to steer it.
+- **▷ From footage**: describe a story, or choose **Story from selection** / **Story from results**
+  in the Library. The model builds an edit sequence whose every shot is an indexed file and time
+  range (see the story bullet above); each of its takes is saved as an idea.
+
+Every idea, whatever its origin, can **Build edit sequence** (or **Rebuild**): the model picks real
+shots for it from its linked analysed items, else the days of its moment, else a catalogue search
+for its title and line. The sequence (cited shots in editing order, pickup shots still needed,
+other takes) opens from the card; each shot opens the item at that time. Ideas move through idea →
+planned → shooting → editing → published (or dropped); title, format and notes are edited in
+place; filter by status or by where they came from; **Copy** puts an idea and its shot list on the
+clipboard. Writing models: Gemma 3 12B (best writing), Spark-X2.6 4B (fast), Qwen3 8B or Phi-4 Mini
+through the loopback Ollama service; with none chosen, the best one installed. Story explorations
+saved before the two pages became one are moved onto the pad the first time it opens.
 
 ### People
 
@@ -660,7 +671,8 @@ for processing. Tool names include
 `catalog_search`, `catalog_asset`, `catalog_analyze`, `catalog_jobs`, `catalog_resolve`,
 `catalog_correct_scene`, `catalog_ideas`, `catalog_import_takeout`, `catalog_picker_create`,
 `catalog_metadata_coverage`, and the Idea Pad tools `idea_pad_list`, `idea_pad_add`,
-`idea_pad_update`, `idea_pad_delete`, `idea_pad_moments` and `idea_pad_generate`.
+`idea_pad_update`, `idea_pad_delete`, `idea_pad_moments`, `idea_pad_generate` and
+`idea_pad_develop` (`catalog_ideas` saves its stories to the pad too).
 `catalog_search` exposes `limit` (1–200) and `offset` for paging through the whole known inventory.
 
 ```sh

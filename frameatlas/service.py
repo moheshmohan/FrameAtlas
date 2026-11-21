@@ -108,6 +108,10 @@ class Service:
             return idea_pad.update(self.store, args.get("id"), **{k: v for k, v in args.items() if k != "id"})
         if action == "idea_pad_delete":
             return idea_pad.delete(self.store, args.get("id"))
+        if action == "idea_pad_develop":
+            if set(args) - {"id", "model"}:
+                raise ValueError("Develop with: id, model")
+            return idea_pad.develop(self.store, args.get("id"), args.get("model", ""))
         if action == "idea_pad_moments":
             return idea_pad.moments(self.store, args.get("since", ""), args.get("until", ""), whole(args.get("limit", 40)))
         if action == "idea_pad_generate":
@@ -225,9 +229,13 @@ class Service:
                 raise ValueError("Choose distinct catalogue asset IDs or omit asset_ids")
             if "search_scope" in args and args["search_scope"] is None:
                 raise ValueError("Provide Library search filters or omit search_scope")
-            return ideas.generate(self.store, args.get("prompt", ""), args.get("model", ""),
-                                  args.get("expand_search", False), asset_ids=args.get("asset_ids"),
-                                  search_scope=args.get("search_scope"))
+            idea_pad.adopt_story_runs(self.store)
+            result = ideas.generate(self.store, args.get("prompt", ""), args.get("model", ""),
+                                    args.get("expand_search", False), asset_ids=args.get("asset_ids"),
+                                    search_scope=args.get("search_scope"))
+            with self.store.connect() as db:
+                result["saved_ids"] = idea_pad.save_story(db, result, args.get("prompt", ""), result.get("run"))
+            return result
         if action == "idea_history":
             with self.store.connect() as db:
                 return {"items": [{"id": x["id"], "prompt": x["prompt"], "result": json.loads(x["result"]), "created": x["created"]} for x in db.execute("SELECT * FROM ideas ORDER BY id DESC LIMIT 12")]}

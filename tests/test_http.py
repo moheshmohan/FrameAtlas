@@ -34,6 +34,16 @@ class HttpBoundaryTests(unittest.TestCase):
                 with self.assertRaises(urllib.error.HTTPError) as e:
                     req('/api/import_manifest', manifest, {'X-FrameAtlas-Token': token, 'Origin': 'https://attacker.test'})
                 self.assertEqual(e.exception.code, 403)
+                # A refused POST must not leave its unread body to spoil the next request on a kept-alive connection.
+                import http.client
+                conn = http.client.HTTPConnection(url.split('//')[1].rstrip('/'), timeout=10)
+                conn.request('POST', '/api/import_manifest', json.dumps(manifest), {'Content-Type': 'application/json', 'X-FrameAtlas-Token': 'stale'})
+                refused = conn.getresponse(); refused.read()
+                self.assertEqual(refused.status, 403)
+                conn.request('GET', '/api/session')
+                again = conn.getresponse()
+                self.assertEqual((again.status, 'csrf' in json.loads(again.read())), (200, True))
+                conn.close()
                 result = req('/api/import_manifest', manifest, {'X-FrameAtlas-Token': token})
                 self.assertEqual(result['added'], 1)
                 with self.assertRaises(urllib.error.HTTPError):
