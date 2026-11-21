@@ -109,3 +109,12 @@ button.match:hover{text-decoration:underline}
 .idea-sequence ul,.idea-sequence ol{margin:4px 0;padding-left:18px;font-size:12px}
 .idea-alts{margin-top:8px}.idea-alts summary{font-weight:500}.idea-alt{margin-top:8px}.idea-alt .fine{margin:2px 0}
 .idea-asked{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+
+/* Trips, days out and return visits */
+.idea-chip.trip{background:var(--soft);color:var(--green)}
+.idea-trip-list{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px;max-height:420px;overflow:auto}
+.idea-trip{display:flex;gap:10px;justify-content:space-between;align-items:flex-start;padding:8px 10px;border:1px solid var(--line);border-radius:10px;min-width:0}
+.idea-trip>div:first-child{min-width:0}
+.idea-trip p{margin:2px 0 0;overflow-wrap:anywhere}
+.idea-trip-actions{display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end;flex-shrink:0}
+@media (max-width:600px){.idea-trip{flex-direction:column}.idea-trip-actions{justify-content:flex-start}}

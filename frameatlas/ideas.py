@@ -22,7 +22,7 @@ def pick(model, allowed):
         raise ValueError("Choose an already installed local writing model (" + ", ".join(allowed) + "). No models are downloaded by this app.")
     return model
 STORY_SEARCH_KEYS = ("query", "provider", "kind", "status", "category", "since", "until", "bounds",
-                     "capture_month", "filename", "source_access", "speech_state", "speech_only", "scene_only", "person")
+                     "capture_month", "filename", "source_access", "speech_state", "speech_only", "scene_only", "person", "place")
 
 
 def step_text(value):

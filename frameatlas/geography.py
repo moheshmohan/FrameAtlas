@@ -121,5 +121,9 @@ def inside_bounds(bounds):
     embedded, embedded_bounds = pair("a.analysis", "embedded_gps")
     supplied, supplied_bounds = pair("a.metadata", "gps")
     linked, linked_bounds = pair("a.metadata", "takeout_location.gps")
+    # an item with no recorded position matches by the position of its imported place
+    place_longitude = "p.longitude BETWEEN ? AND ?" if west <= east else "(p.longitude >= ? OR p.longitude <= ?)"
+    imported = (f"a.id IN (SELECT ap.asset_id FROM asset_places ap JOIN places p ON p.id=ap.place_id "
+                f"WHERE p.latitude BETWEEN ? AND ? AND {place_longitude})")
     return (f"(CASE WHEN {embedded} THEN {embedded_bounds} WHEN {supplied} THEN {supplied_bounds} "
-            f"WHEN {linked} THEN {linked_bounds} ELSE 0 END)", [south, north, west, east] * 3)
+            f"WHEN {linked} THEN {linked_bounds} ELSE {imported} END)", [south, north, west, east] * 4)

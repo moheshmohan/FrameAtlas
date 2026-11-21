@@ -161,7 +161,8 @@ def facts(asset):
 POSITION_SQL = """(json_type(a.analysis,'$.embedded_gps.latitude') IN ('real','integer')
     OR json_type(a.metadata,'$.gps.latitude') IN ('real','integer')
     OR json_type(a.metadata,'$.takeout_location.gps.latitude') IN ('real','integer')
-    OR COALESCE(json_extract(a.metadata,'$.location'),'')<>'')"""
+    OR COALESCE(json_extract(a.metadata,'$.location'),'')<>''
+    OR a.id IN (SELECT asset_id FROM asset_places))"""
 CAMERA_SQL = """(json_type(a.metadata,'$.camera')='text' AND json_extract(a.metadata,'$.camera')<>''
     OR COALESCE(json_extract(a.metadata,'$.camera.make'),'')<>''
     OR COALESCE(json_extract(a.metadata,'$.camera.model'),'')<>'')"""
@@ -192,7 +193,8 @@ def coverage(store):
     google = rows.get("google_photos", Counter())
     if google["total"] and google["location"] < google["total"]:
         notes.append("Google Photos: the Picker does not report positions and Google removes them from downloads. "
-                     "Import a Google Takeout export (its JSON sidecars hold the positions) and link records to add places.")
+                     "Import Google Photos' places (an agent reads them in your browser: places_import) to label items with "
+                     "their place, or a Google Takeout export (its JSON sidecars hold the positions) and link records.")
     if google["total"] and google["camera"] < google["total"]:
         notes.append("Google Photos: camera make and model come from the Picker. Items picked from now on keep them; "
                      "earlier picks get them when they are selected again.")

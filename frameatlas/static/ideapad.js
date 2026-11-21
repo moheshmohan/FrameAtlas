@@ -13,6 +13,14 @@ function setIdeaMode(mode){
  $$('[data-idea-form]').forEach(f=>f.classList.toggle('hidden',f.dataset.ideaForm!==mode));
  try{localStorage.setItem('frameatlas.ideaMode',mode)}catch{}
 }
+const MOMENT_KINDS={trip:'✈ Trip',day_out:'⌂ Day out',return:'↺ Return visit'};
+function tripLine(m){
+ const t=m.trip;if(!t||!MOMENT_KINDS[m.kind])return'';
+ const bits=[m.kind==='return'?(t.years||[]).join(', '):`${m.days} day${m.days===1?'':'s'}`];
+ if(t.distance_km)bits.push(`${fmt(t.distance_km)} km from ${t.home}`);
+ if(t.abroad&&t.abroad.length)bits.push(t.abroad.join(', '));
+ return `<span class="idea-chip trip">${esc(MOMENT_KINDS[m.kind])} · ${esc(bits.join(' · '))}</span>`;
+}
 function ideaMoment(m){
  if(!m)return'';
  const c=m.counts||{};const parts=[m.start===m.end?m.start:`${m.start} → ${m.end}`,
@@ -20,7 +28,7 @@ function ideaMoment(m){
  if(m.people&&m.people.length)parts.push('with '+m.people.map(p=>p.replace(/ ×\d+$/,'')).join(', '));
  if(m.places&&m.places.length)parts.push(m.places.join(' · '));
  if(m.devices&&m.devices.length)parts.push(m.devices.slice(0,2).join(' · '));
- return `<p class="idea-moment">${m.anniversary?`<span class="idea-chip warm">${esc(m.anniversary)}</span>`:''}${esc(parts.filter(Boolean).join(' · '))}</p>`;
+ return `<p class="idea-moment">${tripLine(m)}${m.anniversary?`<span class="idea-chip warm">${esc(m.anniversary)}</span>`:''}${esc(parts.filter(Boolean).join(' · '))}</p>`;
 }
 function shotRef(s,attrs){
  return `<button class="source-ref" ${attrs}>↳ ${esc(s.filename||s.asset_id)} · ${esc(citationTime(s))}${s.source_part?`<br>Part ${Number(s.source_part.index)+1}: ${esc(s.source_part.filename)} · source ${clock(s.source_part.start)}–${clock(s.source_part.end)}`:''}<br>${esc(s.reason||'')}</button>`;
@@ -116,12 +124,50 @@ async function loadIdeaPad(){
  }));
  $$('[data-idea-dates]').forEach(b=>b.onclick=safe(async()=>{const [s,e]=b.dataset.ideaDates.split('|');resetLibraryFilters();$('#since').value=s;$('#until').value=e;$('#date-row').classList.remove('hidden');navigate('library');offset=0;await search()}));
 }
+// ---- trips, days out and return visits read from imported places
+function placesLine(list){
+ if(!list||!list.length)return'';
+ return `<div class="people-line">${list.map(p=>`<button class="person-chip place-chip" data-place-open="${p.id}" data-place-name="${esc(p.name)}" title="${esc(p.address||p.name)}"><span>⌖ ${esc(p.name)}</span></button>`).join('')}</div>`;
+}
+async function showPlaceMedia(ids,name){resetLibraryFilters();placeFilter={ids:String(ids),name:name||'this place'};navigate('library');offset=0;await search()}
+let ideaTrips=[];
+function tripRow(t,k){
+ const when=t.kind==='return'?(t.years||[]).join(', '):(t.start===t.end?t.start:`${t.start} → ${t.end}`);
+ const where=t.places.slice(0,4).map(p=>p.replace(/ ×\d+$/,'')).join(', ');
+ const far=t.distance_km?`${fmt(t.distance_km)} km from ${t.home}`:'';
+ const span=t.kind==='return'?`${t.visits.length} visits`:`${t.days} day${t.days===1?'':'s'}`;
+ return `<li class="idea-trip"><div><span class="idea-chip trip">${esc(MOMENT_KINDS[t.kind])}</span> <strong>${esc(t.area)}</strong>${t.abroad&&t.abroad.length?` · ${esc(t.abroad.join(', '))}`:''}
+  <p class="fine">${esc([when,span,far,where].filter(Boolean).join(' · '))}</p></div>
+  <div class="idea-trip-actions"><button class="text-button" data-trip-ideas="${k}">✧ Ideas from this</button><button class="text-button" data-trip-footage="${k}">Footage →</button></div></li>`;
+}
+async function loadIdeaTrips(){
+ const kind=$('#idea-trips-kind').value;
+ const r=await api('places_trips',{limit:300,...(kind?{kind}:{})});
+ ideaTrips=r.trips;
+ $('#idea-trips-count').textContent=r.located_days?`${fmt(r.total)} found in ${fmt(r.located_days)} days with a place`:'';
+ $('#idea-trips-list').innerHTML=ideaTrips.length?ideaTrips.map(tripRow).join(''):`<li class="fine">${r.located_days?'None of this kind yet.':'No places imported yet. An agent can read Google Photos’ Places in your browser and import them with places_import (see the README).'}</li>`;
+ $$('[data-trip-ideas]').forEach(b=>b.onclick=()=>{
+  const t=ideaTrips[Number(b.dataset.tripIdeas)];
+  setIdeaMode('moments');
+  $('#idea-generate-since').value=t.kind==='return'?'':t.start;$('#idea-generate-until').value=t.kind==='return'?'':t.end;
+  $('#idea-generate-kind').value=t.kind;$('#idea-generate-focus').value=t.kind==='return'?t.area:'';
+  $('#idea-generate-form').scrollIntoView({behavior:'smooth',block:'center'});$('#idea-generate').focus({preventScroll:true});
+  toast('Dates and kind filled in. Press Generate ideas.');
+ });
+ $$('[data-trip-footage]').forEach(b=>b.onclick=safe(async()=>{
+  const t=ideaTrips[Number(b.dataset.tripFootage)];
+  if(t.kind==='return'){await showPlaceMedia(t.place_ids.join(','),t.area);return}
+  resetLibraryFilters();$('#since').value=t.start;$('#until').value=t.end;$('#date-row').classList.remove('hidden');navigate('library');offset=0;await search();
+ }));
+}
 async function showFreshIdeas(ids){
  ideaFresh=new Set(ids||[]);ideaFilter='';ideaOrigin='';ideaShown=Math.max(ideaShown,100);
  await loadIdeaPad();
  const first=$('.idea-card.fresh');if(first)first.scrollIntoView({behavior:'smooth',block:'center'});
 }
 function setupIdeaPad(){
+ $('#idea-trips').addEventListener('toggle',safe(async()=>{if($('#idea-trips').open)await loadIdeaTrips()}));
+ $('#idea-trips-kind').onchange=safe(loadIdeaTrips);
  let saved='write';try{saved=localStorage.getItem('frameatlas.ideaMode')||'write'}catch{}
  setIdeaMode(saved);
  $$('[data-idea-mode]').forEach(b=>b.onclick=()=>setIdeaMode(b.dataset.ideaMode));
@@ -132,7 +178,7 @@ function setupIdeaPad(){
   const idea=await api('idea_pad_add',{title:$('#idea-pad-title').value,logline:$('#idea-pad-logline').value,notes:$('#idea-pad-notes').value,format:$('#idea-pad-format').value,tags},true);
   e.target.reset();$('#idea-pad-format').value='other';toast('Idea saved. Build an edit sequence for it when your footage is analysed.');await showFreshIdeas([idea.id])});
  $('#idea-generate-form').onsubmit=safe(async e=>{e.preventDefault();const b=$('#idea-generate');b.disabled=true;b.textContent='Reading your library…';
-  try{const r=await api('idea_pad_generate',{count:Number($('#idea-generate-count').value),since:$('#idea-generate-since').value,until:$('#idea-generate-until').value,focus:$('#idea-generate-focus').value,model:$('#idea-generate-model').value,include_used:$('#idea-generate-used').checked},true);
+  try{const r=await api('idea_pad_generate',{count:Number($('#idea-generate-count').value),since:$('#idea-generate-since').value,until:$('#idea-generate-until').value,focus:$('#idea-generate-focus').value,model:$('#idea-generate-model').value,include_used:$('#idea-generate-used').checked,kind:$('#idea-generate-kind').value},true);
    toast(`${r.items.length} new idea${r.items.length===1?'':'s'} from ${r.moments_considered} moments`);await showFreshIdeas(r.items.map(i=>i.id))}
   finally{b.disabled=false;b.textContent='✧ Generate ideas'}});
 }

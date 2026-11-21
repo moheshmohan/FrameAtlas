@@ -281,6 +281,18 @@ class Store:
               asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, source TEXT NOT NULL,
               model TEXT NOT NULL, faces INTEGER NOT NULL, error TEXT NOT NULL DEFAULT '', scanned REAL NOT NULL,
               PRIMARY KEY(asset_id, source));
+            CREATE TABLE IF NOT EXISTS places (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT NOT NULL, key TEXT NOT NULL, name TEXT NOT NULL,
+              address TEXT NOT NULL DEFAULT '', country TEXT NOT NULL DEFAULT '', latitude REAL, longitude REAL,
+              updated REAL NOT NULL, UNIQUE(source, key));
+            CREATE TABLE IF NOT EXISTS place_days (
+              place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE, day TEXT NOT NULL,
+              items INTEGER NOT NULL, first TEXT NOT NULL DEFAULT '', last TEXT NOT NULL DEFAULT '',
+              PRIMARY KEY(place_id, day));
+            CREATE TABLE IF NOT EXISTS asset_places (
+              asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+              place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE, PRIMARY KEY(asset_id, place_id));
+            CREATE INDEX IF NOT EXISTS asset_places_place ON asset_places(place_id);
             CREATE TABLE IF NOT EXISTS idea_pad (
               id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, logline TEXT NOT NULL DEFAULT '',
               notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'idea', format TEXT NOT NULL DEFAULT 'other',
@@ -444,7 +456,7 @@ class Store:
 
     def search(self, query="", provider="", kind="", status="", category="", since="", until="", limit=48, offset=0,
                bounds="", capture_month="", speech_only=False, filename="", scene_only=False, source_access="",
-               speech_state="", person="", *, require_caption=False):
+               speech_state="", person="", place="", *, require_caption=False):
         if speech_only in ("true", "false"):
             speech_only = speech_only == "true"
         if not isinstance(speech_only, bool):
@@ -540,6 +552,13 @@ class Store:
             for pid in ids:
                 clauses.append("a.id IN (SELECT asset_id FROM faces WHERE person_id=?)")
                 args.append(int(pid))
+        if place not in ("", None):
+            # one or more places (comma-separated ids): the item was taken at any of them
+            ids = str(place).split(",") if isinstance(place, (str, int)) and not isinstance(place, bool) else None
+            if not ids or len(ids) > 50 or any(not i.strip().isdigit() or len(i.strip()) > 12 for i in ids):
+                raise ValueError("Place must be up to 50 place IDs")
+            clauses.append(f"a.id IN (SELECT asset_id FROM asset_places WHERE place_id IN ({','.join('?' * len(ids))}))")
+            args.extend(int(i) for i in ids)
         if bounds != "":
             from .geography import inside_bounds, search_bounds
             location_clause, location_args = inside_bounds(search_bounds(bounds))

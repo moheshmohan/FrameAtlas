@@ -157,13 +157,14 @@ to run the restored web app. Checksums detect accidental corruption, not malicio
 
 - **✎ Write one**: title, one line, notes, format and tags.
 - **✧ From moments**: a local writing model proposes ideas from *moments* the metadata shows:
-  days or runs of days with far more footage than usual, days with 360 recordings or several
-  videos, and days whose anniversary comes up in the next three weeks. Each moment carries its
+  trips away from home, days out nearby and places you keep going back to (once places are
+  imported, see below), days or runs of days with far more footage than usual, days with 360
+  recordings or several videos, and days whose anniversary comes up in the next three weeks. Each moment carries its
   counts, devices, places, named people, tags and a few analysed items' descriptions. The model
   picks a moment, writes a title, a logline and why it is worth making now, and chooses shots from
   that moment only; **Footage from these days →** opens them in the Library. Moments that already
   have an idea are skipped next time unless you include them. Set a date range or a focus (for
-  example `360` or `beach`) to steer it.
+  example `360` or `beach`) to steer it, or keep to one kind of moment.
 - **▷ From footage**: describe a story, or choose **Story from selection** / **Story from results**
   in the Library. The model builds an edit sequence whose every shot is an indexed file and time
   range (see the story bullet above); each of its takes is saved as an idea.
@@ -177,6 +178,29 @@ place; filter by status or by where they came from; **Copy** puts an idea and it
 clipboard. Writing models: Gemma 3 12B (best writing), Spark-X2.6 4B (fast), Qwen3 8B or Phi-4 Mini
 through the loopback Ollama service; with none chosen, the best one installed. Story explorations
 saved before the two pages became one are moved onto the pad the first time it opens.
+
+### Places, trips and days out
+
+Google's Picker and downloads never say where a photo was taken, but Google Photos' **Places**
+page groups located photos by place. An agent reads it in your own signed-in browser with
+[`scripts/google_photos_places.js`](scripts/google_photos_places.js): the list of places with
+Google's place key, each place's position and address from Google Maps, and for every day there
+the local time of the first and last item and how many there were. `places_import` keeps that,
+finds each place's time zone by matching those items to the catalogue to the second, and labels
+the items taken there between a day's first and last item. Read a few places at a time: Google
+stops returning results after roughly 25,000 photos scrolled, for an hour or so. Reading a place
+again replaces the days it lists and keeps the rest.
+
+**Trips, days out and return visits** on the Ideas page read those days back. Places within
+30 km form an area; home is the area you were in on most days within four months of each date
+(with a small pull towards where you were most often), so it moves when you move. Days away from
+home (gaps of up to two days without a place are allowed) make a trip; a single day closer than
+250 km is a day out; an area you went to again in another year is a return visit. Each shows its
+dates, distance from home, the countries or regions in Google's address and the places;
+**✧ Ideas from this** fills in the moments form and **Footage →** opens its days (or, for a
+return visit, everything at those places) in the Library. In the Library, an item's detail shows
+its places, and choosing one lists everything there; `catalog_search` takes `place` and its
+`bounds` also match items by their place's position.
 
 ### People
 
@@ -234,7 +258,8 @@ library knows** on the Idea Pad shows how much of the catalogue has each:
 - **Device guesses** come from filename patterns (`IMG_1234.HEIC` → iPhone, `IMG-…-WA…` →
   WhatsApp, `DSC_…` → Nikon, `.insv` → Insta360 and so on) and are always labelled as guesses.
 - **Place**: Google removes positions from Picker downloads and the Picker does not report them,
-  so Google items get a place only from a linked Google Takeout record. Local video originals are
+  so Google items get a place from imported Google Photos places (see *Places, trips and days
+  out*) or a linked Google Takeout record. Local video originals are
   read for embedded GPS (`python3 -m frameatlas.cli metadata-backfill` checks any never read).
 
 ## Offline boundary
@@ -694,7 +719,8 @@ for processing. Tool names include
 `catalog_correct_scene`, `catalog_ideas`, `catalog_import_takeout`, `catalog_picker_create`,
 `catalog_metadata_coverage`, and the Idea Pad tools `idea_pad_list`, `idea_pad_add`,
 `idea_pad_update`, `idea_pad_delete`, `idea_pad_moments`, `idea_pad_generate` and
-`idea_pad_develop` (`catalog_ideas` saves its stories to the pad too).
+`idea_pad_develop` (`catalog_ideas` saves its stories to the pad too), and the place tools
+`places_import`, `places_list` and `places_trips`.
 `catalog_search` exposes `limit` (1–200) and `offset` for paging through the whole known inventory.
 
 ```sh

@@ -6,7 +6,7 @@ import time
 from urllib.parse import quote
 
 from . import importers, ideas
-from . import idea_pad, metadata as capture_info, people
+from . import idea_pad, metadata as capture_info, people, places
 from .metadata import picker_camera
 from .worker import broker, resolve, Cache, ANALYSIS_RESERVE
 
@@ -50,7 +50,7 @@ class Service:
         if not isinstance(args, dict):
             raise ValueError("Arguments must be a JSON object")
         if action == "search":
-            allowed = {"query", "provider", "kind", "status", "category", "since", "until", "limit", "offset", "bounds", "capture_month", "speech_only", "scene_only", "filename", "source_access", "speech_state", "person"}
+            allowed = {"query", "provider", "kind", "status", "category", "since", "until", "limit", "offset", "bounds", "capture_month", "speech_only", "scene_only", "filename", "source_access", "speech_state", "person", "place"}
             return self.store.search(**{k: v for k, v in args.items() if k in allowed})
         if action == "search_related":
             filters = {k: args[k] for k in ("provider", "kind", "status", "category", "since", "until", "bounds", "capture_month", "speech_only", "scene_only", "source_access", "speech_state")
@@ -66,6 +66,9 @@ class Service:
                     args.get("scene_key", ""), args.get("part_filename", ""))
             asset["facts"] = capture_info.facts(asset)
             asset["people"] = people.asset_people(self.store, asset["id"])
+            with self.store.connect() as db:
+                asset["places"] = [dict(r) for r in db.execute("""SELECT p.id, p.name, p.address, p.latitude, p.longitude
+                    FROM asset_places a JOIN places p ON p.id=a.place_id WHERE a.asset_id=? ORDER BY p.name""", (asset["id"],))]
             return asset
         if action == "people_status":
             return {**people.progress(self.store), "running": scan_running(self.store)}
@@ -134,6 +137,21 @@ class Service:
             if set(args) - {"source", "people", "apply"} or not isinstance(args.get("apply", False), bool):
                 raise ValueError("Import with: source, people, apply")
             return people.import_names(self.store, args.get("source", "google_photos"), args.get("people"), apply=args.get("apply", False))
+        if action == "places_import":
+            if set(args) - {"source", "places"}:
+                raise ValueError("Import with: source, places")
+            return places.import_places(self.store, args.get("source", "google_photos"), args.get("places"))
+        if action == "places":
+            return places.list_places(self.store, args.get("query", ""), whole(args.get("limit", 200)), whole(args.get("offset", 0)))
+        if action == "places_trips":
+            for key in ("since", "until"):
+                if args.get(key):
+                    idea_pad._date(args[key], key.title())
+            return places.trips(self.store, args.get("since", ""), args.get("until", ""), args.get("kind", ""), whole(args.get("limit", 200)))
+        if action == "places_forget":
+            if args.get("confirm") is not True:
+                raise ValueError("Pass confirm: true to delete every imported place")
+            return places.forget(self.store, args.get("source", "google_photos"))
         if action == "people_forget":
             if args.get("confirm") is not True:
                 raise ValueError("Pass confirm: true to delete every face and person")
@@ -159,11 +177,12 @@ class Service:
                 raise ValueError("Develop with: id, model")
             return idea_pad.develop(self.store, args.get("id"), args.get("model", ""))
         if action == "idea_pad_moments":
-            return idea_pad.moments(self.store, args.get("since", ""), args.get("until", ""), whole(args.get("limit", 40)))
+            return idea_pad.moments(self.store, args.get("since", ""), args.get("until", ""), whole(args.get("limit", 40)),
+                                    kind=args.get("kind", ""))
         if action == "idea_pad_generate":
             return idea_pad.generate(self.store, args.get("model", ""), args.get("count", 5),
                                      args.get("since", ""), args.get("until", ""), args.get("focus", ""),
-                                     args.get("include_used", False))
+                                     args.get("include_used", False), kind=args.get("kind", ""))
         if action == "coverage":
             return self.store.coverage(args.get("provider", ""), args.get("limit", 24), args.get("offset", 0),
                                        kind=args.get("kind", ""))

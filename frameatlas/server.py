@@ -16,7 +16,7 @@ READ_ACTIONS = {"search", "asset", "coverage", "stats", "jobs", "job", "resolve"
                 "picker_sessions", "picker_queued_items", "picker_reselection", "compare_sources",
                 "idea_pad", "idea_pad_moments", "metadata_coverage", "people", "person", "people_status",
                 "faces_unsorted", "people_suggest",
-                "people_review", "people_compare"}
+                "people_review", "people_compare", "places", "places_trips"}
 
 
 def serve(root=DATA, port=7318):
