@@ -10,14 +10,15 @@ import time
 import tempfile
 
 def default_cli():
-    """FILMCRAFT_CLI, else filmcraft-cli on PATH, else a sibling AutoCut checkout's release build."""
+    """FILMCRAFT_CLI, else filmcraft-cli on PATH, else a sibling AutoCut checkout's newest release build."""
     found = os.environ.get("FILMCRAFT_CLI") or shutil.which("filmcraft-cli")
     if found:
         return found
     sibling = Path(__file__).resolve().parent.parent.parent / "Autocut" / "target"
-    for build in (sibling / "agent-main/release/filmcraft-cli", sibling / "release/filmcraft-cli"):
-        if build.exists():
-            return str(build)
+    # the newest of the checkout's release builds (an older lane build would miss new commands)
+    builds = [b for b in (sibling / "agent-main/release/filmcraft-cli", sibling / "release/filmcraft-cli") if b.is_file()]
+    if builds:
+        return str(max(builds, key=lambda b: b.stat().st_mtime))
     return "filmcraft-cli"
 
 
@@ -169,6 +170,36 @@ class Native:
     def __exit__(self, *args):
         self.close()
 
+    def read_faces(self, item, kind, scenes, probe):
+        """Faces at full resolution while the original is open: the photo, or up to six frames
+        spread over a video's shots. None when the face models are not installed."""
+        status = self.run("faces.status")
+        if not status.get("installed"):
+            return None
+        if kind == "photo":
+            times = [0.0]
+        else:
+            shots = [s for s in scenes if s.get("details", s).get("sample_time") is None and s.get("end", 0) > s.get("start", 0)]
+            mids = sorted({round((s["start"] + s["end"]) / 2, 2) for s in shots if isinstance(s.get("start"), (int, float)) and isinstance(s.get("end"), (int, float))})
+            if not mids:
+                length = float((probe or {}).get("duration") or 0) / TICKS
+                mids = [length / 2] if length > 0 else [0.0]
+            step = max(1, len(mids) // 6)
+            times = mids[::step][:6]
+        crops = self.work / "face-crops"
+        crops.mkdir(exist_ok=True)
+        paths = []
+        for i, t in enumerate(times):
+            out = self.work / f"faces-{i}.png"
+            self.run("media.frame", {"item": item, "seconds": t, "maxSide": 1600 if kind == "photo" else 1280, "path": str(out)})
+            paths.append(str(out))
+        result = self.run("media.faces", {"paths": paths, "cropsDir": str(crops), "maxSide": 1024}, timeout=600)
+        pictures = result.get("pictures") or []
+        for p, t in zip(pictures, times):
+            if isinstance(p, dict):
+                p["at"] = None if kind == "photo" else t
+        return {"model": result.get("model") or status["fingerprints"]["id"], "source": "original" if kind == "photo" else "frame", "pictures": pictures}
+
     def check_speech_model(self, model):
         models = self.run("transcript.models")
         if not any(x.get("id") == model and x.get("installed") for x in models.get("models", [])):
@@ -275,6 +306,15 @@ class Native:
                       "camera_proxy_attached":bool(imported.get('proxies')),
                       "claims": "Model descriptions are suggestions. Visible text, identities and landmarks require verification."}
         if preview_file:provenance['_preview_file']=preview_file
+        if kind in ("photo", "video") and not vr:
+            try:
+                found = self.read_faces(item, kind, scenes, probe)
+                if found:
+                    provenance["_faces"] = found
+            except Exception as exc:
+                if self.cancelled():
+                    raise RuntimeError("Job cancelled")
+                provenance["face_error"] = str(exc)[:500]
         if kind == "photo":
             from .geography import coordinates
             try:

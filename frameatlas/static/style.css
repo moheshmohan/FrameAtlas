@@ -60,3 +60,23 @@ button.match:hover{text-decoration:underline}
 .idea-card-bottom{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:auto}.idea-card-bottom .danger{color:#a33;margin-left:auto}
 .idea-coverage strong{font-size:22px}.facts-line{margin-top:-4px}
 .idea-more{display:block;margin:-24px auto 40px}
+
+.people-bar{display:flex;justify-content:space-between;align-items:center;margin:14px 0}
+.people-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(150px,38vw),1fr));gap:14px;margin-bottom:30px}
+.person-card{position:relative;background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.person-card.selected{outline:2px solid var(--green)}.person-card.is-hidden{opacity:.55}
+.person-card .card-check{position:absolute;top:14px;left:14px;z-index:1}
+.person-face{border:0;padding:0;background:var(--soft);border-radius:8px;overflow:hidden;aspect-ratio:1;display:grid;place-items:center;width:100%;cursor:pointer}
+.person-face img{width:100%;height:100%;object-fit:cover}.person-face.big{width:120px;flex:none}
+.person-name{border:1px solid transparent;background:transparent;font-weight:600;font-size:14px;padding:3px 4px;border-radius:5px;width:100%}
+.person-name:hover,.person-name:focus{border-color:var(--line);background:#fff}.person-name.big{font-size:22px}
+.person-actions{display:flex;justify-content:space-between}.person-card .fine{margin:0}
+.person-dialog{width:min(980px,94vw);max-height:90vh;border:0;border-radius:14px;padding:24px}.person-dialog::backdrop{background:rgba(20,30,25,.45)}
+.person-dialog .close{position:absolute;right:16px;top:12px}
+.person-head{display:flex;gap:18px;align-items:flex-start;margin-bottom:16px}
+.person-faces{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:10px}
+.person-face-tile{margin:0;text-align:center;font-size:11px}.person-face-tile figcaption{color:var(--muted);margin:3px 0 0}
+.people-line{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.person-chip{display:flex;align-items:center;gap:6px;border:1px solid var(--line);background:#fff;border-radius:20px;padding:2px 10px 2px 2px;font-size:12px;cursor:pointer}
+.person-chip img{width:24px;height:24px;border-radius:50%;object-fit:cover}.person-chip:disabled{cursor:default;opacity:.7}
+.people-note{max-width:760px}

@@ -575,6 +575,7 @@ class Worker:
         if provenance['is_360'] and not detected_360:
             provenance['coverage_warning']='Source was flagged 360°, but native calibrated VR properties could not be validated. Directional analysis is required.'
         preview_file=provenance.pop('_preview_file','')
+        found_faces=provenance.pop('_faces',None)
         thumb = asset.get('thumbnail','')
         spherical = provenance['is_360']
         if spherical and not calibrated_preview(asset['analysis']):
@@ -608,6 +609,14 @@ class Worker:
         if spherical and thumb:
             provenance['preview_projection'] = 'calibrated_direction'
         self.store.analysis(asset["id"], scenes, speech, provenance, thumb, job_id=jid)
+        if found_faces:
+            # full-resolution faces replace the preview's; a failure here never fails the analysis
+            try:
+                from . import people
+                with self.store.connect() as db:
+                    people.record(self.store, db, asset["id"], found_faces["source"], found_faces["pictures"], found_faces["model"])
+            except Exception as exc:
+                print("FrameAtlas: faces not stored for", asset["id"], str(exc)[:300], flush=True)
 
     def loop(self):
         from .lookahead import Lookahead

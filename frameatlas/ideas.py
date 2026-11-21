@@ -8,6 +8,19 @@ from pathlib import Path
 from .ollama_local import request_json
 
 MAX_IDEA_ASSETS = 18
+# Local writing models, best first; with none chosen the best installed one writes.
+WRITERS = ("gemma3:12b", "maternion/spark-x2.6:4b-q6_k", "qwen3:8b", "phi4-mini:latest")
+# Search wording wants speed over prose.
+PHRASERS = ("maternion/spark-x2.6:4b-q6_k", "phi4-mini:latest", "qwen3:8b", "gemma3:12b")
+
+
+def pick(model, allowed):
+    installed = local_models()
+    if not model:
+        model = next((m for m in allowed if m in installed), "")
+    if model not in allowed or model not in installed:
+        raise ValueError("Choose an already installed local writing model (" + ", ".join(allowed) + "). No models are downloaded by this app.")
+    return model
 STORY_SEARCH_KEYS = ("query", "provider", "kind", "status", "category", "since", "until", "bounds",
                      "capture_month", "filename", "source_access", "speech_state", "speech_only", "scene_only")
 
@@ -60,13 +73,12 @@ def related_phrases(prompt, model):
     return list(dict.fromkeys(valid))
 
 
-def search_related(store, query, model="phi4-mini:latest", **filters):
+def search_related(store, query, model="", **filters):
     if not isinstance(query, str) or len(query) > 500 or not any(ch.isalnum() for ch in query):
         raise ValueError("Enter a search query of up to 500 characters")
     query = query.strip()
     literal = store.search(query=query, limit=24, **filters)["items"]
-    if model not in ("phi4-mini:latest", "qwen3:8b") or model not in local_models():
-        raise ValueError("Choose an already installed local writing model or use Search library")
+    model = pick(model, PHRASERS)
     phrases = [phrase for phrase in related_phrases(query, model) if phrase != query.casefold()]
     items = {asset["id"]: {**asset, "matched_query": query} for asset in literal[:12]}
     for phrase in phrases:
@@ -81,7 +93,7 @@ def search_related(store, query, model="phi4-mini:latest", **filters):
     return {"items": list(items.values()), "phrases": phrases, "model": model}
 
 
-def generate(store, prompt, model="qwen3:8b", expand_search=False, *, asset_ids=None, search_scope=None):
+def generate(store, prompt, model="", expand_search=False, *, asset_ids=None, search_scope=None):
     if not isinstance(expand_search, bool):
         raise ValueError("expand_search must be boolean")
     selected = []
@@ -104,8 +116,7 @@ def generate(store, prompt, model="qwen3:8b", expand_search=False, *, asset_ids=
         selected = [store.get(aid, include_scenes=False) for aid in asset_ids]
         if any(asset["status"] not in ("ready", "partial") for asset in selected):
             raise ValueError("Analyse the selected media locally before generating a story")
-    if model not in ("phi4-mini:latest", "qwen3:8b") or model not in local_models():
-        raise ValueError("Choose an already installed local writing model. No models are downloaded by this app.")
+    model = pick(model, WRITERS)
     prompt = str(prompt or "")[:2000]
     tokens=[token.rstrip(".") for token in re.findall(r'[\w.-]+',prompt)]
     identifiers=[t for t in tokens if re.match(r'^(?:VID|IMG)_[0-9_]+(?:\.[a-z0-9]+)?$',t,re.I) or re.search(r'\.(?:mp4|mov|insv|insp|jpg|jpeg|heic|png)$',t,re.I)]

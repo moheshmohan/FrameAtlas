@@ -153,8 +153,9 @@ to run the restored web app. Checksums detect accidental corruption, not malicio
 ### Idea Pad
 
 **Idea Pad** (in the sidebar) keeps video ideas in the catalogue. Write one down (title, one line,
-notes, format, tags), or press **Generate ideas** and a local writing model (Qwen3 8B or Phi-4
-Mini through the loopback Ollama service, whichever is installed) proposes some from your library.
+notes, format, tags), or press **Generate ideas** and a local writing model proposes some from
+your library: Gemma 3 12B (best writing), Spark-X2.6 4B (fast), Qwen3 8B or Phi-4 Mini through the
+loopback Ollama service; with none chosen, the best one installed.
 
 Generation starts from *moments* that the metadata shows: days or runs of days with far more
 footage than usual, days with 360 recordings or several videos, and days whose anniversary comes
@@ -165,6 +166,28 @@ and linked shots, so **Footage from these days →** opens them in the Library. 
 have a generated idea are skipped next time unless you include them. Set a date range or a focus
 (for example `360` or `beach`) to steer it. Ideas move through idea → planned → shooting → editing
 → published (or dropped); titles and notes are edited in place.
+
+### People
+
+**People** (in the sidebar) finds the faces in your media and groups them into people you can
+name. Everything runs on this Mac through FilmCraft: YuNet finds each face, its five landmarks
+align it, and **AuraFace-v1** (Apache-2.0, an ArcFace-trained ResNet-100, on the GPU) turns it into
+a 512-number fingerprint; `faces.group` groups the fingerprints (nearest neighbours, then Chinese
+Whispers). Press **Find faces in my library** to scan the stored previews (about 40 a second on an
+M-series Mac); items analysed from their originals get full-resolution faces (the photo, or six
+frames spread over a video), which replace the preview's.
+
+- Name a person on their card; names survive regrouping. Select two cards to merge them.
+- Open a person to remove faces that are someone else: a removed face never goes back to them.
+- **Hide** a passer-by without deleting anything. Groups of fewer than three faces get no person.
+- **Media →** opens the Library filtered to that person; MCP's `catalog_search` takes `person`
+  (one ID, or several for items with all of them). Named people appear in the Idea Pad's moments
+  and in the ideas written about them.
+- Face data stays in the catalogue (`faces/` holds 128 px crops); **Delete all face data** on the
+  People page (or the `people_forget` action) removes every face, person and correction.
+
+MCP tools: `people_status`, `people_scan`, `people_regroup`, `people_list`, `person_get`,
+`person_update`, `person_merge`, `face_assign`. From a terminal: `python3 -m frameatlas.people scan`.
 
 ### Capture metadata: when, where, with what
 

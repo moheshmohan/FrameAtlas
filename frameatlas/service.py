@@ -1,13 +1,38 @@
 import json
+import os
 from collections import Counter
 from pathlib import Path
 import time
 from urllib.parse import quote
 
 from . import importers, ideas
-from . import idea_pad, metadata as capture_info
+from . import idea_pad, metadata as capture_info, people
 from .metadata import picker_camera
 from .worker import broker, resolve, Cache, ANALYSIS_RESERVE
+
+
+def scan_running(store):
+    import fcntl
+    try:
+        with open(Path(store.root) / "face-scan.lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(lock, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return True
+
+
+def start_scan(store, action):
+    """Start the face scan (or a regroup) as its own process; it holds the scan lock."""
+    import subprocess, sys
+    if scan_running(store):
+        return {"started": False, "running": True}
+    log = open(Path(store.root) / "face-scan.log", "a")
+    subprocess.Popen([sys.executable, "-m", "frameatlas.people", action], cwd=str(Path(__file__).resolve().parent.parent),
+                     stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
+                     env={**os.environ, "FRAMEATLAS_DATA": str(store.root)})
+    log.close()
+    return {"started": True, "running": True}
 
 
 def whole(value):
@@ -25,12 +50,12 @@ class Service:
         if not isinstance(args, dict):
             raise ValueError("Arguments must be a JSON object")
         if action == "search":
-            allowed = {"query", "provider", "kind", "status", "category", "since", "until", "limit", "offset", "bounds", "capture_month", "speech_only", "scene_only", "filename", "source_access", "speech_state"}
+            allowed = {"query", "provider", "kind", "status", "category", "since", "until", "limit", "offset", "bounds", "capture_month", "speech_only", "scene_only", "filename", "source_access", "speech_state", "person"}
             return self.store.search(**{k: v for k, v in args.items() if k in allowed})
         if action == "search_related":
             filters = {k: args[k] for k in ("provider", "kind", "status", "category", "since", "until", "bounds", "capture_month", "speech_only", "scene_only", "source_access", "speech_state")
                        if k in args}
-            return ideas.search_related(self.store, args.get("query", ""), args.get("model", "phi4-mini:latest"), **filters)
+            return ideas.search_related(self.store, args.get("query", ""), args.get("model", ""), **filters)
         if action == "asset":
             asset = self.store.get(args.get("id", ""))
             citation_fields = {"start", "end", "sample_time", "scene_key", "part_filename"}
@@ -40,7 +65,33 @@ class Service:
                     asset["scenes"], args.get("start"), args.get("end"), args.get("sample_time"),
                     args.get("scene_key", ""), args.get("part_filename", ""))
             asset["facts"] = capture_info.facts(asset)
+            asset["people"] = people.asset_people(self.store, asset["id"])
             return asset
+        if action == "people_status":
+            return {**people.progress(self.store), "running": scan_running(self.store)}
+        if action in ("people_scan", "people_regroup"):
+            return start_scan(self.store, "scan" if action == "people_scan" else "group")
+        if action == "people":
+            flag = lambda k: args.get(k) in (True, "true")
+            return people.list_people(self.store, include_hidden=flag("include_hidden"), named_only=flag("named_only"),
+                                      limit=args.get("limit", 200), offset=args.get("offset", 0))
+        if action == "person":
+            return people.person(self.store, args.get("id"), limit=args.get("limit", 60), offset=args.get("offset", 0))
+        if action == "person_update":
+            known = {"id", "name", "hidden", "notes"}
+            if set(args) - known:
+                raise ValueError("Change any of: name, hidden, notes")
+            return people.update_person(self.store, args.get("id"), name=args.get("name"), hidden=args.get("hidden"), notes=args.get("notes"))
+        if action == "person_merge":
+            return people.merge(self.store, args.get("into"), args.get("other"))
+        if action == "face_assign":
+            if not isinstance(args.get("new_person", False), bool):
+                raise ValueError("new_person must be true or false")
+            return people.assign_face(self.store, args.get("face"), args.get("person"), new_person=args.get("new_person", False))
+        if action == "people_forget":
+            if args.get("confirm") is not True:
+                raise ValueError("Pass confirm: true to delete every face and person")
+            return people.forget(self.store)
         if action == "metadata_coverage":
             return capture_info.coverage(self.store)
         if action == "metadata_backfill":
@@ -174,7 +225,7 @@ class Service:
                 raise ValueError("Choose distinct catalogue asset IDs or omit asset_ids")
             if "search_scope" in args and args["search_scope"] is None:
                 raise ValueError("Provide Library search filters or omit search_scope")
-            return ideas.generate(self.store, args.get("prompt", ""), args.get("model", "qwen3:8b"),
+            return ideas.generate(self.store, args.get("prompt", ""), args.get("model", ""),
                                   args.get("expand_search", False), asset_ids=args.get("asset_ids"),
                                   search_scope=args.get("search_scope"))
         if action == "idea_history":

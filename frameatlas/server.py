@@ -14,7 +14,7 @@ from .worker import Worker, WorkerBusy
 STATIC = Path(__file__).parent / "static"
 READ_ACTIONS = {"search", "asset", "coverage", "stats", "jobs", "job", "resolve", "models", "idea_history",
                 "picker_sessions", "picker_queued_items", "picker_reselection", "compare_sources",
-                "idea_pad", "idea_pad_moments", "metadata_coverage"}
+                "idea_pad", "idea_pad_moments", "metadata_coverage", "people", "person", "people_status"}
 
 
 def serve(root=DATA, port=7318):
@@ -76,6 +76,15 @@ def serve(root=DATA, port=7318):
                         return
                     args = {k: v[-1] for k, v in parse_qs(url.query).items()}
                     self.reply(service.dispatch(action, args))
+                elif path.startswith("/face/"):
+                    name = path[len("/face/"):]
+                    if not (name.endswith(".jpg") and name[:-4].isdigit() and len(name) < 24):
+                        raise ValueError("Invalid face")
+                    p = store.root / "faces" / name
+                    if p.is_symlink() or not p.is_file() or p.stat().st_size > 512 * 1024:
+                        self.reply({"error": "Face not found"}, 404)
+                    else:
+                        self.reply(p.read_bytes(), mime="image/jpeg")
                 elif path.startswith("/thumb/"):
                     name = path[7:]
                     import re
@@ -87,7 +96,7 @@ def serve(root=DATA, port=7318):
                     else:
                         self.reply(p.read_bytes(), mime="image/jpeg")
                 else:
-                    files = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8"), "/ideapad.js": ("ideapad.js", "text/javascript; charset=utf-8")}
+                    files = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8"), "/ideapad.js": ("ideapad.js", "text/javascript; charset=utf-8"), "/people.js": ("people.js", "text/javascript; charset=utf-8")}
                     if path not in files:
                         self.reply({"error": "Not found"}, 404)
                         return

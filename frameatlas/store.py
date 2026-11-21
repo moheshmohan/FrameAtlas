@@ -261,6 +261,26 @@ class Store:
               coverage TEXT NOT NULL, count INTEGER NOT NULL, created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS ideas (id INTEGER PRIMARY KEY, prompt TEXT, result TEXT, created REAL);
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS people (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL DEFAULT '', hidden INTEGER NOT NULL DEFAULT 0,
+              cover_face INTEGER, notes TEXT NOT NULL DEFAULT '', created REAL NOT NULL, updated REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS faces (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+              source TEXT NOT NULL, at REAL, bbox TEXT NOT NULL, landmarks TEXT NOT NULL,
+              score REAL NOT NULL, side REAL NOT NULL, frontal REAL NOT NULL,
+              embedding BLOB NOT NULL, model TEXT NOT NULL,
+              person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+              confirmed INTEGER NOT NULL DEFAULT 0, crop TEXT NOT NULL DEFAULT '', created REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS faces_asset ON faces(asset_id);
+            CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);
+            CREATE TABLE IF NOT EXISTS face_rejects (
+              face_id INTEGER NOT NULL REFERENCES faces(id) ON DELETE CASCADE,
+              person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE, PRIMARY KEY(face_id, person_id));
+            CREATE TABLE IF NOT EXISTS face_scans (
+              asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE, source TEXT NOT NULL,
+              model TEXT NOT NULL, faces INTEGER NOT NULL, error TEXT NOT NULL DEFAULT '', scanned REAL NOT NULL,
+              PRIMARY KEY(asset_id, source));
             CREATE TABLE IF NOT EXISTS idea_pad (
               id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, logline TEXT NOT NULL DEFAULT '',
               notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'idea', format TEXT NOT NULL DEFAULT 'other',
@@ -424,7 +444,7 @@ class Store:
 
     def search(self, query="", provider="", kind="", status="", category="", since="", until="", limit=48, offset=0,
                bounds="", capture_month="", speech_only=False, filename="", scene_only=False, source_access="",
-               speech_state="", *, require_caption=False):
+               speech_state="", person="", *, require_caption=False):
         if speech_only in ("true", "false"):
             speech_only = speech_only == "true"
         if not isinstance(speech_only, bool):
@@ -512,6 +532,14 @@ class Store:
             clauses.append("a.captured>=?"); args.append(bounded(since, 32))
         if until:
             clauses.append("a.captured<?"); args.append(bounded(until, 32) + "T99")
+        if person not in ("", None):
+            # one or more people (comma-separated ids): every one of them is in the item
+            ids = str(person).split(",") if isinstance(person, (str, int)) and not isinstance(person, bool) else None
+            if not ids or len(ids) > 8 or any(not i.strip().isdigit() or len(i.strip()) > 12 for i in ids):
+                raise ValueError("Person must be up to eight person IDs")
+            for pid in ids:
+                clauses.append("a.id IN (SELECT asset_id FROM faces WHERE person_id=?)")
+                args.append(int(pid))
         if bounds != "":
             from .geography import inside_bounds, search_bounds
             location_clause, location_args = inside_bounds(search_bounds(bounds))

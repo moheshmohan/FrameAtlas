@@ -8,6 +8,7 @@ function ideaMoment(m){
  if(!m)return'';
  const c=m.counts||{};const parts=[m.start===m.end?m.start:`${m.start} → ${m.end}`,
   [c.photos?`${fmt(c.photos)} photos`:'',c.videos?`${fmt(c.videos)} videos`:'',c['360']?`${fmt(c['360'])} 360°`:''].filter(Boolean).join(', ')];
+ if(m.people&&m.people.length)parts.push('with '+m.people.map(p=>p.replace(/ ×\d+$/,'')).join(', '));
  if(m.places&&m.places.length)parts.push(m.places.join(' · '));
  if(m.devices&&m.devices.length)parts.push(m.devices.slice(0,2).join(' · '));
  return `<p class="idea-moment">${m.anniversary?`<span class="idea-chip warm">${esc(m.anniversary)}</span>`:''}${esc(parts.filter(Boolean).join(' · '))}</p>`;

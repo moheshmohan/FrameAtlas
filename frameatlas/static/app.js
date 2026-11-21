@@ -14,7 +14,7 @@ const matchTime = m => m.source_part ? `Part ${Number(m.source_part.index)+1} ·
 const date = s => s ? String(s).slice(0,10) : 'Date unknown';
 const sourceName = p => ({google_photos:'Google Photos',insta360:'Insta360',local:'Local reference'}[p]||p);
 let csrf='', page='library', provider='', offset=0, results=[], total=0, selected=new Map(), currentAsset=null, stats=null;
-let bounds='',captureMonth='';
+let bounds='',captureMonth='',personFilter=null;
 let searchGeneration=0, relatedResults=false, relatedPending=false, toastTimer;
 async function api(action,args={},post=false,retried=false) {
   const response=await fetch('/api/'+action+(post?'':'?'+new URLSearchParams(args)),post?{method:'POST',headers:{'Content-Type':'application/json','X-FrameAtlas-Token':csrf},body:JSON.stringify(args)}:{});
@@ -22,7 +22,7 @@ async function api(action,args={},post=false,retried=false) {
 }
 function toast(text,error=false){const e=$('#toast');e.textContent=text;e.classList.toggle('error',error);e.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>e.classList.add('hidden'),error?12000:6000)}
 function safe(fn){return async event=>{try{await fn(event)}catch(e){toast(e.message,true)}}}
-function navigate(next){page=next;$$('.page').forEach(p=>p.classList.toggle('hidden',p.id!==next));$$('.nav').forEach(n=>n.classList.toggle('active',n.dataset.page===next));$('#page-name').textContent={library:'Library',ideapad:'Idea Pad',ideas:'Story ideas',queue:'Analysis queue',sources:'Sources & storage'}[next];if(location.hash!=='#'+next)history.replaceState(null,'','#'+next);if(next==='queue')loadJobs();if(next==='sources'){loadStats();loadPickerBatches().catch(e=>toast(e.message))}if(next==='ideas')loadHistory();if(next==='ideapad')loadIdeaPad().catch(e=>toast(e.message,true));window.scrollTo(0,0)}
+function navigate(next){page=next;$$('.page').forEach(p=>p.classList.toggle('hidden',p.id!==next));$$('.nav').forEach(n=>n.classList.toggle('active',n.dataset.page===next));$('#page-name').textContent={library:'Library',people:'People',ideapad:'Idea Pad',ideas:'Story ideas',queue:'Analysis queue',sources:'Sources & storage'}[next];if(location.hash!=='#'+next)history.replaceState(null,'','#'+next);if(next==='queue')loadJobs();if(next==='sources'){loadStats();loadPickerBatches().catch(e=>toast(e.message))}if(next==='ideas')loadHistory();if(next==='ideapad')loadIdeaPad().catch(e=>toast(e.message,true));if(next==='people')loadPeople().catch(e=>toast(e.message,true));window.scrollTo(0,0)}
 async function loadStats(){stats=await api('stats');$('#nav-count').textContent=fmt(stats.total);$('#stat-total').textContent=fmt(stats.total);$('#stat-scenes').textContent=fmt(stats.scenes);$('#stat-speech').textContent=fmt(stats.transcribed);$('#stat-cache').textContent=size(stats.temporary_bytes);$('#cache-cap').textContent=size(stats.temporary_cap)+' cap · includes reservations';$('#queue-cache-cap').textContent=size(stats.temporary_cap);if(!$('#storage-limit').dataset.dirty)$('#storage-limit').value=String(stats.temporary_cap/1024**3);const categories=$('#category'),value=categories.value;categories.innerHTML='<option value="">All categories</option>'+stats.categories.map(c=>`<option>${esc(c)}</option>`).join('');categories.value=value;
  $('#storage-details').innerHTML=`<dt>Metadata database</dt><dd>${size(stats.db_bytes)}</dd><dt>Temporary storage used / reserved</dt><dd>${size(stats.temporary_bytes)} / ${size(stats.temporary_cap)}</dd><dt>Available analysis budget</dt><dd>${size(stats.available_budget)}</dd><dt>Persistent full originals</dt><dd>None in FrameAtlas</dd><dt>Inference</dt><dd>This Mac only</dd>`;
  $('#import-history').innerHTML=stats.imports.length?stats.imports.map(i=>`<div class="history-row"><div><strong>${esc(i.label)}</strong><p class="muted">${esc(i.coverage)}</p></div><span>${fmt(i.count)} items<br><span class="muted">${new Date(i.created*1000).toLocaleDateString()}</span></span></div>`).join(''):'<p class="muted">No imports yet. Start with an existing AutoCut inventory or Google Picker selection.</p>';
@@ -117,11 +117,11 @@ async function showPickerQueue(session,offset=0){
  if(!dialog.open)dialog.showModal();
 }
 function resetLibraryFilters(){
- provider='';bounds='';captureMonth='';offset=0;
+ provider='';bounds='';captureMonth='';personFilter=null;offset=0;
  ['query','kind','status','search-scope','category','source-access','speech-state','since','until','gps-bounds'].forEach(id=>$('#'+id).value='');
  $$('[data-source]').forEach(b=>b.classList.toggle('selected',!b.dataset.source));
 }
-function filters(){const text=$('#query').value;const exact=$('#search-scope').value==='filename';return{query:exact?'':text,filename:exact&&text.trim()?text:'',provider,kind:$('#kind').value,status:$('#status').value,speech_only:$('#search-scope').value==='speech',scene_only:$('#search-scope').value==='scenes',category:$('#category').value,source_access:$('#source-access').value,speech_state:$('#speech-state').value,since:$('#since').value,until:$('#until').value,bounds,capture_month:captureMonth,limit:24,offset}}
+function filters(){const text=$('#query').value;const exact=$('#search-scope').value==='filename';return{query:exact?'':text,filename:exact&&text.trim()?text:'',provider,kind:$('#kind').value,status:$('#status').value,speech_only:$('#search-scope').value==='speech',scene_only:$('#search-scope').value==='scenes',category:$('#category').value,source_access:$('#source-access').value,speech_state:$('#speech-state').value,since:$('#since').value,until:$('#until').value,bounds,capture_month:captureMonth,person:personFilter?String(personFilter.id):'',limit:24,offset}}
 let storySearchScope=null;
 async function search(related=false){
  const generation=++searchGeneration, {limit,offset:pageOffset,...criteria}=filters();
@@ -146,7 +146,7 @@ async function search(related=false){
   total=related?results.length:response.total;
   renderCards();
   $('#result-count').textContent=fmt(total)+' items';
-  $('#results-title').textContent=related?'Related search results':(criteria.query||criteria.filename)?'Search results':provider?sourceName(provider):'All media';
+  $('#results-title').textContent=related?'Related search results':personFilter?`With ${personFilter.name}`:(criteria.query||criteria.filename)?'Search results':provider?sourceName(provider):'All media';
   note.classList.toggle('hidden',!related);
   note.textContent=response.phrases?.length?'Also searched '+response.phrases.map(phrase=>'“'+phrase+'”').join(', ')+'.':'The local model returned no additional wording.';
   $('#prev').disabled=related||pageOffset===0;
@@ -239,7 +239,7 @@ function factsLine(f){if(!f)return'';const w=f.when,bits=[];
  if(f.place)bits.push('📍 '+(f.place.label||`${f.place.latitude.toFixed(4)}, ${f.place.longitude.toFixed(4)}`));
  if(f.picture&&f.picture.width)bits.push(`${f.picture.width}×${f.picture.height}${f.picture.fps?' · '+(Math.round(f.picture.fps*100)/100)+' fps':''}`);
  return `<p class="fine facts-line">${esc(bits.join(' · '))}${!f.place&&f.place_status?`<br><span title="${esc(f.place_status)}">📍 No place recorded</span>`:''}</p>`}
-function renderDetail(match,transcriptOnly=false){const a=currentAsset;$('#detail-content').innerHTML=`<div class="detail-top"><div class="detail-preview">${a.thumbnail?`<img src="/thumb/${esc(a.thumbnail)}" alt="${esc(a.filename)}">`:'▧'}</div><div><p class="eyebrow">${esc(sourceName(a.provider))}${(a.metadata.is_360||a.analysis.is_360)?' · 360° RECORDING':''}</p><h2>${esc(a.filename)}</h2><p>${date(a.captured)} · ${a.kind} ${a.bytes?'· '+size(a.bytes):''}</p>${factsLine(a.facts)}<p>${esc(a.summary||'This item has metadata only. Analyse it to index its scenes and spoken words.')}</p><div class="tag-list">${a.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="detail-actions"><button class="button primary" id="detail-analyze">Analyse locally</button><button class="button" id="detail-source">Open cloud source ↗</button><button class="button" id="detail-export">Export metadata</button><button class="button" id="detail-retrieve">Prepare for editor</button></div></div></div><div class="tabs"><button class="active" data-tab="scenes">Scenes · ${a.scenes.length}</button><button data-tab="speech">Transcript</button><button data-tab="source">Source & provenance</button><button data-tab="edit">Correct & organise</button></div><div class="detail-section" id="detail-tab"></div>`;
+function renderDetail(match,transcriptOnly=false){const a=currentAsset;$('#detail-content').innerHTML=`<div class="detail-top"><div class="detail-preview">${a.thumbnail?`<img src="/thumb/${esc(a.thumbnail)}" alt="${esc(a.filename)}">`:'▧'}</div><div><p class="eyebrow">${esc(sourceName(a.provider))}${(a.metadata.is_360||a.analysis.is_360)?' · 360° RECORDING':''}</p><h2>${esc(a.filename)}</h2><p>${date(a.captured)} · ${a.kind} ${a.bytes?'· '+size(a.bytes):''}</p>${factsLine(a.facts)}${peopleLine(a.people)}<p>${esc(a.summary||'This item has metadata only. Analyse it to index its scenes and spoken words.')}</p><div class="tag-list">${a.tags.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><div class="detail-actions"><button class="button primary" id="detail-analyze">Analyse locally</button><button class="button" id="detail-source">Open cloud source ↗</button><button class="button" id="detail-export">Export metadata</button><button class="button" id="detail-retrieve">Prepare for editor</button></div></div></div><div class="tabs"><button class="active" data-tab="scenes">Scenes · ${a.scenes.length}</button><button data-tab="speech">Transcript</button><button data-tab="source">Source & provenance</button><button data-tab="edit">Correct & organise</button></div><div class="detail-section" id="detail-tab"></div>`;
  $('#detail-retrieve').onclick=safe(()=>showRetrievalForm());showTab(match?.kind==='speech'||transcriptOnly?'speech':'scenes',match);$$('[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));$('#detail-analyze').onclick=()=>openAnalysis([a.id]);$('#detail-source').onclick=safe(async()=>{const r=await api('resolve',{id:a.id});const link=r.cloud_url||r.search_url;if(link)window.open(link,'_blank','noopener,noreferrer');else{showTab('source');toast('Open Insta360 Studio and find the recording name shown here')}});$('#detail-export').onclick=()=>{const blob=new Blob([JSON.stringify(a,null,2)],{type:'application/json'});const u=URL.createObjectURL(blob);const link=document.createElement('a');link.href=u;link.download=a.filename+'.catalogue.json';link.click();setTimeout(()=>URL.revokeObjectURL(u),1000)};
 }
 function renderScene(s,match,first){
@@ -465,7 +465,7 @@ async function init(){csrf=(await (await fetch('/api/session')).json()).csrf;$$(
  $('#gps-toggle').onclick=()=>{const visible=!$('#gps-filter').classList.toggle('hidden');$('#gps-toggle').setAttribute('aria-expanded',String(visible))};
  $('#gps-filter').onsubmit=safe(async e=>{e.preventDefault();const previous=bounds;bounds=$('#gps-bounds').value.trim();offset=0;try{await search()}catch(err){bounds=previous;throw err}});
  $('#gps-clear').onclick=safe(async()=>{$('#gps-bounds').value='';bounds='';offset=0;await search()});
- setupAnalysis();setupStudioInventory();setupIdeaPad();await Promise.all([loadStats(),search(),loadJobs()]);const initial=location.hash.slice(1);if(['library','ideapad','ideas','queue','sources'].includes(initial))navigate(initial);
+ setupAnalysis();setupStudioInventory();setupIdeaPad();setupPeople();await Promise.all([loadStats(),search(),loadJobs()]);const initial=location.hash.slice(1);if(['library','people','ideapad','ideas','queue','sources'].includes(initial))navigate(initial);
  setInterval(async()=>{try{await loadJobs();await loadStats();if(page==='library'&&stats.statuses.ready!==undefined&&!$('#detail').open&&!relatedResults&&!relatedPending)await search()}catch{}},10000);
 }
 async function showRetrievalForm(reference={}){
@@ -538,6 +538,7 @@ function setupAnalysis(){
 }
 async function handleDetailClick(e){
  if(e.target===$('#detail')){$('#detail').close();return}
+ const chip=e.target.closest('[data-person-open]');if(chip){$('#detail').close();await openPerson(Number(chip.dataset.personOpen));return}
  if(e.target.closest('#retry-speech')){const a=currentAsset;openAnalysis([a.id],{replace:a.analysis.speech_status==='complete',language:a.analysis.speech?.language,model:a.analysis.speech_model});return}
  const copy=e.target.closest('[data-copy-clip],[data-copy-speech],[data-prepare-clip],[data-prepare-speech]');
  if(copy){
