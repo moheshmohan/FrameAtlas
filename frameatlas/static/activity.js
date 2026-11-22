@@ -11,6 +11,7 @@ const when=t=>{const d=new Date(t*1000);return d.toLocaleDateString(undefined,{m
 const clientName=c=>c==='mcp'?'Agent':c.startsWith('mcp:')?c.slice(4):c==='owner'?'You':c;
 
 function setupActivity(){
+  $('#refresh-health').onclick=safe(loadHealth);
   $('#activity-refresh').onclick=safe(loadActivity);
   $('#activity-reads').onchange=safe(async e=>{activityReads=e.target.checked;activityOffset=0;await loadActivity()});
   $('#activity-prev').onclick=safe(async()=>{activityOffset=Math.max(0,activityOffset-ACTIVITY_PAGE);await loadActivity()});
@@ -39,4 +40,15 @@ function renderLog(r){
   $('#activity-prev').disabled=r.offset===0;$('#activity-next').disabled=r.offset+r.items.length>=r.total;
   $('#activity-log').innerHTML=r.items.length?`<div class="activity-table"><table><thead><tr><th>When</th><th>Who</th><th>What</th><th>Kind</th><th>Result</th><th></th></tr></thead><tbody>${r.items.map(i=>`<tr><td class="nowrap">${esc(when(i.at))}</td><td>${esc(clientName(i.client))}</td><td><code>${esc(i.tool)}</code><details><summary>Arguments</summary><pre>${esc(i.args)}</pre></details></td><td><span class="tier tier-${esc(i.tier)}">${esc(i.tier)}</span></td><td>${i.ok?'<span class="status ready">done</span>':`<span class="status failed">${esc(i.code||'failed')}</span>`} ${i.task?`<span class="fine">task #${esc(i.task)}</span>`:''}<div class="fine">${esc(i.summary)}</div></td><td>${i.undone?'<span class="fine">undone</span>':i.can_undo?`<button class="button small" data-undo="${i.id}">Undo</button>`:''}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty"><h2>No agent activity yet</h2><p>When an AI agent connected to FrameAtlas changes something, it is listed here and can often be undone.</p></div>';
   $$('[data-undo]').forEach(b=>b.onclick=safe(async()=>{const u=await api('activity_undo',{id:Number(b.dataset.undo)},true);toast('Undone: '+u.tool);await loadActivity()}));
+}
+
+// What needs attention (Sources & storage): the same report agents read with catalog_health.
+async function loadHealth(){
+  const r=await api('health');
+  $('#health-list').innerHTML=r.items.length?`<ul class="health-list">${r.items.map(i=>`<li class="health-item ${esc(i.level)}"><span class="status ${i.level==='action'?'failed':'queued'}">${i.level==='action'?'act':'note'}</span><div><strong>${esc(i.title)}</strong><p class="fine">${esc(i.detail)}</p>${healthLink(i)}</div></li>`).join('')}</ul>`:'<p class="muted">Nothing needs attention.</p>';
+  $$('[data-health-go]').forEach(b=>b.onclick=safe(async()=>{const go=b.dataset.healthGo;if(go==='never'){resetLibraryFilters();$('#status').value='metadata_only';provider=b.dataset.provider||'';$$('[data-source]').forEach(x=>x.classList.toggle('selected',x.dataset.source===provider));navigate('library');offset=0;await search()}else navigate(go)}));
+}
+function healthLink(i){
+  const go={failed_jobs:'queue',queue_paused:'queue',agent_waiting:'activity',people_review:'people',faces_unsorted:'people',not_analysed:'never'}[i.kind];
+  return go?`<button class="text-button" data-health-go="${go}"${i.next&&i.next.provider?` data-provider="${esc(i.next.provider)}"`:''}>Open →</button>`:'';
 }

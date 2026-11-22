@@ -183,9 +183,10 @@ def import_places(store, source, places):
                 first, last = last, first
             parsed.append((first, last, items, _kind(d.get("first_kind")), _kind(d.get("last_kind"))))
         clean.append((key, name, address, position, parsed))
-    out = {"places": 0, "days": 0, "matched": 0, "labelled": 0, "without_zone": 0, "without_position": 0}
+    out = {"places": 0, "days": 0, "matched": 0, "labelled": 0, "without_zone": 0, "without_position": 0, "zone_from_nearby": 0}
     with store.connect() as db:
         db.execute("BEGIN IMMEDIATE")
+        _zone_column(db)
         index = _Index(db)
         now = time.time()
         zones, pending = Counter(), []
@@ -216,8 +217,20 @@ def import_places(store, source, places):
             out["places"] += 1
         common = zones.most_common(1)[0][0] if zones else None
         for pid, days, votes in pending:
-            # A place's own matches set its zone; a place with none takes the zone most places had.
-            q = votes.most_common(1)[0][0] if votes else common
+            # A place's own matches set its zone (kept for later reads). A place with none keeps the zone
+            # it had, else takes the zone of the nearest place within 500 km that has one, else the zone
+            # most places in this import had.
+            if votes:
+                q = votes.most_common(1)[0][0]
+                db.execute("UPDATE places SET zone_q=? WHERE id=?", (q, pid))
+            else:
+                q = _known_zone(db, pid)
+                if q is None:
+                    q = _nearby_zone(db, pid)
+                    if q is not None:
+                        out["zone_from_nearby"] += 1
+                if q is None:
+                    q = common
             for first, last, items, _, _ in days:
                 if q is None:
                     utc_first = utc_last = ""
@@ -233,6 +246,33 @@ def import_places(store, source, places):
                            (pid, first.date().isoformat(), items, utc_first, utc_last))
                 out["days"] += 1
     return out
+
+
+def _zone_column(db):
+    if "zone_q" not in [r[1] for r in db.execute("PRAGMA table_info(places)")]:
+        db.execute("ALTER TABLE places ADD COLUMN zone_q INTEGER")
+
+
+def _known_zone(db, pid):
+    row = db.execute("SELECT zone_q FROM places WHERE id=?", (pid,)).fetchone()
+    return row["zone_q"] if row and row["zone_q"] is not None else None
+
+
+NEARBY_KM = 500
+
+
+def _nearby_zone(db, pid):
+    """The time zone (in quarter hours) of the nearest place within 500 km whose zone is known."""
+    me = db.execute("SELECT latitude, longitude FROM places WHERE id=?", (pid,)).fetchone()
+    if not me or me["latitude"] is None or me["longitude"] is None:
+        return None
+    best = None
+    for r in db.execute("""SELECT latitude, longitude, zone_q FROM places WHERE id<>? AND zone_q IS NOT NULL
+            AND latitude IS NOT NULL AND longitude IS NOT NULL""", (pid,)):
+        d = km((me["latitude"], me["longitude"]), (r["latitude"], r["longitude"]))
+        if d <= NEARBY_KM and (best is None or d < best[0]):
+            best = (d, r["zone_q"])
+    return best[1] if best else None
 
 
 def list_places(store, query="", limit=200, offset=0):

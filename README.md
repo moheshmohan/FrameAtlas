@@ -196,6 +196,16 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
   places and agent activity, plus templates for one item (`frameatlas://asset/{id}`), its preview
   image, a person, a place or an idea. Prompts: `find_footage`, `sort_people`, `plan_trip_video` and
   `check_coverage`.
+- **What needs attention**: `catalog_health` (and the top of **Sources & storage**) lists failed jobs
+  grouped by cause with the fix, Google selections about to expire with jobs waiting, items never
+  analysed, a paused queue, Google page reads still to do, people-sorting proposals and unlinked
+  faces, and agent calls waiting for you, most urgent first.
+- **Google page reads as a plan**: reading Google Photos' Places in your browser is a resumable
+  plan FrameAtlas keeps. `google_read_register` takes the list page's names, `google_read_next` hands
+  out the next few within the hour's search budget (none while Google is likely throttling, with when
+  to try again), `google_read_script` gives the browser step to run, and `google_read_result` takes
+  the page's result straight back: a complete read is imported at once, one that stopped early is
+  kept to read again. `google_read_plan` shows where it stands, so any agent can carry on.
 
 ### Ideas (the Idea Pad)
 
@@ -247,7 +257,9 @@ dates, distance from home, the countries or regions in Google's address and the 
 **✧ Ideas from this** fills in the moments form and **Footage →** opens its days (or, for a
 return visit, everything at those places) in the Library. In the Library, an item's detail shows
 its places, and choosing one lists everything there; `catalog_search` takes `place` and its
-`bounds` also match items by their place's position.
+`bounds` also match items by their place's position. A place read on its own whose items match nothing to the second
+takes its time zone from the nearest place within 500 km whose zone is known; every place keeps
+the zone its own items gave it.
 
 ### People
 

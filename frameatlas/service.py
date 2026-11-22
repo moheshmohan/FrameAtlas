@@ -46,7 +46,8 @@ def whole(value):
 
 
 AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", "confirmation_decide", "tasks", "task", "wait",
-                 "ui_show", "ui_select", "ui_state", "ui_report", "ui_poll"}
+                 "ui_show", "ui_select", "ui_state", "ui_report", "ui_poll", "health", "google_read_plan",
+                 "google_read_register", "google_read_next", "google_read_script", "google_read_result", "google_read_reset"}
 
 
 class Service:
@@ -84,6 +85,21 @@ class Service:
             return ui_channel.report(self.store, args.get("state"))
         if action == "ui_poll":  # the open page only
             return ui_channel.poll(self.store, whole(args.get("after", -1)), args.get("wait", ui_channel.POLL_SECONDS))
+        from . import google_reads, health
+        if action == "health":
+            return health.report(self)
+        if action == "google_read_plan":
+            return google_reads.plan(self.store, args.get("kind", "places"))
+        if action == "google_read_register":
+            return google_reads.register(self.store, args.get("kind", "places"), args.get("entries"))
+        if action == "google_read_next":
+            return google_reads.next_names(self.store, args.get("kind", "places"), whole(args.get("count", 5)))
+        if action == "google_read_script":
+            return google_reads.script(whole(args.get("step", 3)))
+        if action == "google_read_result":
+            return google_reads.result(self.store, args)
+        if action == "google_read_reset":
+            return google_reads.reset(self.store, args.get("kind", "places"), args.get("names"))
         raise ValueError("Unknown action")
 
     def dispatch(self, action, args):

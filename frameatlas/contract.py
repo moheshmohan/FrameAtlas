@@ -13,7 +13,7 @@ TIERS = {
         "catalog_studio_ocr", "catalog_idea_history", "idea_pad_list", "idea_pad_moments", "people_status",
         "people_list", "person_get", "faces_unsorted", "people_suggest", "people_review", "people_compare",
         "places_list", "places_trips", "agent_activity", "agent_permissions", "catalog_tasks", "catalog_task",
-        "catalog_wait", "ui_state"},
+        "catalog_wait", "ui_state", "catalog_health", "google_read_plan", "google_read_next", "google_read_script"},
     "write": {
         "catalog_storage_limit", "catalog_retry_speech", "catalog_confirm_studio_download",
         "catalog_cleanup_studio_download", "catalog_cancel", "catalog_queue_control", "catalog_ideas",
@@ -22,7 +22,8 @@ TIERS = {
         "catalog_import_takeout", "catalog_link_takeout_location", "catalog_attach_local", "catalog_batch",
         "idea_pad_add", "idea_pad_update", "idea_pad_develop", "idea_pad_generate", "people_scan",
         "people_regroup", "person_update", "face_assign", "faces_link", "faces_unlink", "people_autosort",
-        "people_review_decide", "people_import_names", "places_import", "agent_undo", "ui_show", "ui_select"},
+        "people_review_decide", "people_import_names", "places_import", "agent_undo", "ui_show", "ui_select", "google_read_register",
+        "google_read_result", "google_read_reset"},
     "destructive": {
         "idea_pad_delete", "person_merge", "people_forget", "places_forget", "catalog_merge", "catalog_picker_close"},
     "outside": {
@@ -76,6 +77,13 @@ OUTPUT_REQUIRED = {
     "ui_show": ["shown", "link"],
     "ui_select": ["selected", "shown"],
     "ui_state": ["page_open", "link"],
+    "catalog_health": ["items", "needs_action"],
+    "google_read_plan": ["kind", "counts", "searches_last_hour", "next_step"],
+    "google_read_next": ["names"],
+    "google_read_script": ["step", "script", "how"],
+    "google_read_result": ["name", "state"],
+    "google_read_register": ["added", "counts"],
+    "google_read_reset": ["reset"],
     "idea_pad_list": ["items", "total"],
     "idea_pad_moments": ["moments"],
     "people_status": ["faces", "people", "named", "running"],
