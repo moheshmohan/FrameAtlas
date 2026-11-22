@@ -29,11 +29,13 @@ def start_scan(store, action, extra=()):
     if scan_running(store):
         return {"started": False, "running": True}
     log = open(Path(store.root) / "face-scan.log", "a")
-    subprocess.Popen([sys.executable, "-m", "frameatlas.people", action, *extra], cwd=str(Path(__file__).resolve().parent.parent),
-                     stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
-                     env={**os.environ, "FRAMEATLAS_DATA": str(store.root)})
+    process = subprocess.Popen([sys.executable, "-m", "frameatlas.people", action, *extra], cwd=str(Path(__file__).resolve().parent.parent),
+                               stdout=log, stderr=log, stdin=subprocess.DEVNULL, start_new_session=True,
+                               env={**os.environ, "FRAMEATLAS_DATA": str(store.root)})
     log.close()
-    return {"started": True, "running": True}
+    from . import agents
+    task = agents.start_process(store, {"scan": "people_scan", "group": "people_regroup", "sort": "people_autosort"}.get(action, action), process.pid)
+    return {"started": True, "running": True, "task": task}
 
 
 def whole(value):
@@ -43,13 +45,40 @@ def whole(value):
     return value
 
 
+AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", "confirmation_decide", "tasks", "task", "wait"}
+
+
 class Service:
     def __init__(self, store):
         self.store = store
 
+    def agent_action(self, action, args):
+        from . import agents
+        if action == "activity":
+            flag = lambda k: args.get(k) in (True, "true")
+            return agents.activity(self.store, include_reads=flag("include_reads"), tool=args.get("tool", ""),
+                                   client=args.get("client", ""), limit=whole(args.get("limit", 100)), offset=whole(args.get("offset", 0)))
+        if action == "activity_undo":
+            return agents.undo(self.store, whole(args.get("id")), client=args.get("client", "owner"))
+        if action == "permissions":
+            return {"permissions": agents.permissions(self.store), "policies": list(agents.POLICIES)}
+        if action == "permissions_set":  # owner only: no MCP tool reaches it
+            return agents.set_permissions(self.store, args.get("permissions"))
+        if action == "confirmation_decide":  # owner only: no MCP tool reaches it
+            return agents.decide_confirmation(self.store, args.get("token", ""), args.get("decision", ""))
+        if action == "tasks":
+            return agents.tasks(self.store, limit=whole(args.get("limit", 50)), state=args.get("state", ""))
+        if action == "task":
+            return agents.task(self.store, whole(args.get("id")))
+        if action == "wait":
+            return agents.wait(self, task_id=args.get("task"), job_id=args.get("job"), timeout=args.get("timeout", 30))
+        raise ValueError("Unknown action")
+
     def dispatch(self, action, args):
         if not isinstance(args, dict):
             raise ValueError("Arguments must be a JSON object")
+        if action in AGENT_ACTIONS:
+            return self.agent_action(action, args)
         if action == "search":
             allowed = {"query", "provider", "kind", "status", "category", "since", "until", "limit", "offset", "bounds", "capture_month", "speech_only", "scene_only", "filename", "source_access", "speech_state", "person", "place"}
             return self.store.search(**{k: v for k, v in args.items() if k in allowed})

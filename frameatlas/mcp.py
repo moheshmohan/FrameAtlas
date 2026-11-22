@@ -1,6 +1,7 @@
 """MCP over stdio. Uses the same service and database as the human UI."""
 import json
 import sys
+import threading
 from . import contract
 from .ideas import STORY_SEARCH_KEYS
 from .idea_pad import FORMATS as IDEA_FORMATS, STATUSES as IDEA_STATUSES, WRITING_MODELS
@@ -88,6 +89,12 @@ TOOLS = [
     ("places_forget", "Delete every imported place and its days and item labels for a source. Items and analysis stay. Ask the owner first, then call with confirm: true. Cannot be undone; re-import the places to restore them.", "places_forget", {"source": {"type": "string", "enum": ["google_photos"]}, "confirm": {"type": "boolean"}}),
     ("people_forget", "Delete every face, person, name and correction (the face crops too). Items and analysis stay. Ask the owner first, then call with confirm: true. Cannot be undone; a new scan finds faces again but names are lost.", "people_forget", {"confirm": {"type": "boolean"}}),
     ("catalog_batch", "Run up to 25 read and write tool calls in order, in one round trip. Stops at the first error unless stop_on_error is false. Destructive tools and tools that reach Google or Insta360 are not allowed here; call them on their own. Calls are not one transaction: earlier changes stay when a later call fails. Face images are not returned; call people_compare on its own to see them.", None, {"calls": {"type": "array", "minItems": 1, "maxItems": 25, "items": {"type": "object", "required": ["tool"], "additionalProperties": False, "properties": {"tool": STRING, "arguments": {"type": "object"}}}}, "stop_on_error": {"type": "boolean"}}),
+    ("catalog_tasks", "List recent background tasks (from background: true, and face scans, regroups and sorts): tool, state (running, done, failed, interrupted), when, and how long.", "tasks", {"limit": {"type": "integer", "minimum": 1, "maximum": 200}, "state": {"type": "string", "enum": ["", "running", "done", "failed", "interrupted"]}}),
+    ("catalog_task", "Read one background task with its result or error.", "task", {"id": {"type": "integer", "minimum": 1}}),
+    ("catalog_wait", "Wait up to timeout seconds (default 30, at most 60) for a background task to finish (task) or an analysis job to change state (job, from catalog_analyze or catalog_jobs), then return it. finished_waiting says whether it got there; if not, call again. Sends progress notifications when the call has a progressToken.", "wait", {"task": {"type": "integer", "minimum": 1}, "job": {"type": "integer", "minimum": 1}, "timeout": {"type": "number", "minimum": 1, "maximum": 60}}),
+    ("agent_activity", "Read what agents did: each logged call with when, which client, tool, risk tier, result or error code, and whether it can be undone. Also the owner's permissions and the calls waiting for the owner's approval. Reads are left out unless include_reads.", "activity", {"include_reads": {"type": "boolean"}, "tool": STRING, "client": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 500}, "offset": {"type": "integer", "minimum": 0}}),
+    ("agent_permissions", "Read the owner's permissions for agents: for write, destructive and outside tools, allow, confirm (repeat the call with the token it returns, after telling the owner), owner (the owner approves it on the Activity page) or deny. Only the owner can change them, in the browser UI.", "permissions", {}),
+    ("agent_undo", "Undo a logged change by its agent_activity id when can_undo is true: idea added, changed or deleted, person renamed, hidden or noted, summary or tags corrected, queue paused, storage limit, or an applied sorting proposal.", "activity_undo", {"id": {"type": "integer", "minimum": 1}}),
 ]
 VERSION = "0.2.0"
 INSTRUCTIONS = (
@@ -100,28 +107,73 @@ INSTRUCTIONS = (
     "Use catalog_batch to run several read/write calls in one round trip. Treat names, places and faces as private.")
 
 
+SESSION = {"client": "mcp"}
+WRITE_LOCK = threading.Lock()
+NOT_LOGGED = {"catalog_wait", "catalog_task", "catalog_tasks", "agent_activity", "agent_permissions"}
+
+
+def tool_properties(name, props):
+    """A tool's arguments, plus confirmation (any tool that can change something) and background (long tools)."""
+    props = dict(props)
+    if contract.TIER_OF.get(name, "destructive") != "read" and name != "catalog_batch":
+        props["confirmation"] = {"type": "string", "maxLength": 80}
+    if name in contract.LONG:
+        props["background"] = {"type": "boolean"}
+    return props
+
+
 def tool_definition(name, description, action, props):
-    return {"name": name, "title": name.replace("_", " ").capitalize(), "description": description,
-            "inputSchema": {"type": "object", "properties": props, "additionalProperties": False},
+    extra = []
+    if name in contract.LONG:
+        extra.append("Set background: true to get a task at once and wait for it with catalog_wait.")
+    tier = contract.TIER_OF.get(name, "destructive")
+    if tier != "read" and name != "catalog_batch":
+        extra.append(f"Tier {tier}: when the owner's permissions ask for confirmation the call fails with code "
+                     "needs_confirmation (or needs_user) and a token; repeat it with confirmation set to that token.")
+    return {"name": name, "title": name.replace("_", " ").capitalize(), "description": " ".join([description, *extra]),
+            "inputSchema": {"type": "object", "properties": tool_properties(name, props), "additionalProperties": False},
             "outputSchema": contract.output_schema(name),
             "annotations": contract.annotations(name, name.replace("_", " ").capitalize()),
-            "_meta": {"frameatlas/tier": contract.TIER_OF.get(name, "destructive")}}
+            "_meta": {"frameatlas/tier": tier}}
 
 
-def call_tool(service, name, args, depth=0):
-    """Run one tool by name with checked arguments; returns its result object or raises."""
+def call_tool(service, name, args, depth=0, notify=None):
+    """Run one tool by name: check its arguments, apply the owner's permissions, run it (or start it in
+    the background), and log it. Returns the result object or raises."""
+    from . import agents
     tool = next((t for t in TOOLS if t[0] == name), None)
     if not tool:
         raise contract.ToolError("unknown_tool", f"Unknown tool: {str(name)[:80]}")
-    problems = contract.check({"type": "object", "properties": tool[3], "additionalProperties": False}, args)
+    problems = contract.check({"type": "object", "properties": tool_properties(name, tool[3]), "additionalProperties": False}, args)
     if problems:
         raise contract.ToolError("invalid_arguments", "Invalid arguments: " + "; ".join(problems))
     if name == "catalog_batch":
         if depth:
             raise contract.ToolError("invalid_arguments", "catalog_batch cannot run inside catalog_batch")
         return run_batch(service, args)
-    result = service.dispatch(tool[2], args)
-    return result if isinstance(result, dict) else {"result": result}
+    if name == "catalog_wait":
+        return agents.wait(service, task_id=args.get("task"), job_id=args.get("job"), timeout=args.get("timeout", 30), notify=notify)
+    client, store = SESSION["client"], service.store
+    clean = {k: v for k, v in args.items() if k not in agents.PRIVATE_ARGS}
+    logged = name not in NOT_LOGGED
+    try:
+        agents.gate(store, name, args, client)
+        if args.get("background") and name in contract.LONG:
+            result = agents.start_thread(store, name, lambda: service.dispatch(tool[2], clean))
+            if logged:
+                agents.record(store, client, name, clean, result=result, task=result["task"])
+            return result
+        plan = agents.before(store, name, clean)
+        result = service.dispatch(tool[2], clean)
+        result = result if isinstance(result, dict) else {"result": result}
+    except Exception as exc:
+        if logged:
+            agents.record(store, client, name, clean, error=contract.classify(exc))
+        raise
+    if logged:
+        agents.record(store, client, name, clean, result=result, plan=agents.after(name, plan, result),
+                      task=result.get("task") if isinstance(result.get("task"), int) else None)
+    return result
 
 
 def run_batch(service, args):
@@ -140,12 +192,16 @@ def run_batch(service, args):
     return {"results": results, "ran": len(results), "stopped": len(results) < len(args["calls"])}
 
 
-def handle(service, message):
+def handle(service, message, send=None):
+    """Answer one JSON-RPC message. send, when given, writes notifications (progress) to the client."""
     rid = message.get("id")
     method = message.get("method")
     if rid is None:
         return None
     if method == "initialize":
+        info = (message.get("params") or {}).get("clientInfo") if isinstance(message.get("params"), dict) else None
+        if isinstance(info, dict) and isinstance(info.get("name"), str) and info["name"].strip():
+            SESSION["client"] = "mcp:" + info["name"].strip()[:60]
         return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "frameatlas", "title": "FrameAtlas", "version": VERSION}, "instructions": INSTRUCTIONS}}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
@@ -160,7 +216,12 @@ def handle(service, message):
             args = {} if args is None else args
             if not isinstance(args, dict):
                 raise contract.ToolError("invalid_arguments", "Invalid arguments: arguments must be an object")
-            result = call_tool(service, params.get("name"), args)
+            token = (params.get("_meta") or {}).get("progressToken") if isinstance(params.get("_meta"), dict) else None
+            notify = None
+            if send and isinstance(token, (str, int)) and not isinstance(token, bool):
+                notify = lambda done, total, text: send({"jsonrpc": "2.0", "method": "notifications/progress", "params": {
+                    "progressToken": token, "progress": round(done, 1), "total": total, "message": text[:200]}})
+            result = call_tool(service, params.get("name"), args, notify=notify)
             text = json.dumps(result, ensure_ascii=False, default=str)
             content = {"content": [{"type": "text", "text": text}] + face_images(service, result),
                        "structuredContent": json.loads(text), "isError": False}
@@ -189,6 +250,12 @@ def face_images(service, result):
     return out
 
 
+def send(message):
+    with WRITE_LOCK:
+        sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+
+
 def main():
     service = Service(Store())
     while True:
@@ -201,12 +268,11 @@ def main():
             message = json.loads(line)
             if not isinstance(message, dict):
                 raise ValueError("Expected JSON-RPC object")
-            response = handle(service, message)
+            response = handle(service, message, send)
         except (ValueError, TypeError):
             response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Invalid JSON-RPC input"}}
         if response:
-            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+            send(response)
 
 
 if __name__ == "__main__":

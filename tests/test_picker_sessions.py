@@ -162,6 +162,9 @@ class PickerSessionTests(unittest.TestCase):
             with self.store.connect() as db:
                 db.execute("UPDATE assets SET status='ready' WHERE id=?", (ready,))
 
+            from frameatlas import agents
+            agents.set_permissions(self.store, {'outside': 'allow'})  # this test is about the import, not permissions
+
             def call(option):
                 result = handle(self.service, {'id': 1, 'method': 'tools/call',
                                 'params': {'name': 'catalog_picker_import',

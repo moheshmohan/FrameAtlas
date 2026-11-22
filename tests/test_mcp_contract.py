@@ -31,6 +31,14 @@ def error_of(result):
     return json.loads(result["content"][0]["text"])["error"]
 
 
+def confirmed(service, name, arguments=None):
+    """Call a tool the way an agent does when the owner's permissions ask for confirmation."""
+    first = call(service, name, arguments)
+    if not first["isError"] or error_of(first)["code"] != "needs_confirmation":
+        return first
+    return call(service, name, {**(arguments or {}), "confirmation": error_of(first)["data"]["confirmation"]})
+
+
 class ContractTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -82,8 +90,9 @@ class ContractTests(unittest.TestCase):
         self.assertGreater(len(actions), 50)
         self.assertGreater(len(calls), 40)
         tools = {t[2] for t in TOOLS if t[2]}
-        self.assertEqual(sorted(actions - tools), [], "service actions without an MCP tool")
-        self.assertEqual(sorted(calls - tools - HTTP_ONLY), [], "page actions without an MCP tool")
+        self.assertEqual(sorted(actions - tools - contract.OWNER_ONLY), [], "service actions without an MCP tool")
+        self.assertEqual(sorted(calls - tools - HTTP_ONLY - contract.OWNER_ONLY), [], "page actions without an MCP tool")
+        self.assertEqual(tools & contract.OWNER_ONLY, set(), "owner-only actions must not be tools")
 
     # ---- results
     def test_read_tools_return_their_promised_shape_or_a_coded_error(self):
@@ -138,11 +147,11 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(error_of(call(self.service, "catalog_asset", {"id": "missing"}))["code"], "not_found")
         for name in ("places_forget", "people_forget"):
             with self.subTest(tool=name):
-                error = error_of(call(self.service, name))
+                error = error_of(confirmed(self.service, name))
                 self.assertEqual(error["code"], "needs_confirmation")
                 self.assertIn("confirm", error["hint"])
-        self.assertEqual(call(self.service, "places_forget", {"confirm": True})["structuredContent"], {"forgotten": 0})
-        self.assertIn("forgotten_faces", call(self.service, "people_forget", {"confirm": True})["structuredContent"])
+        self.assertEqual(confirmed(self.service, "places_forget", {"confirm": True})["structuredContent"], {"forgotten": 0})
+        self.assertIn("forgotten_faces", confirmed(self.service, "people_forget", {"confirm": True})["structuredContent"])
 
     def test_classify(self):
         from frameatlas.worker import WorkerBusy
@@ -186,7 +195,7 @@ class ContractTests(unittest.TestCase):
 
     # ---- the new tools
     def test_merge_and_idea_history_are_tools(self):
-        merged = call(self.service, "catalog_merge", {"keep": self.aid, "duplicate": self.other})
+        merged = confirmed(self.service, "catalog_merge", {"keep": self.aid, "duplicate": self.other})
         self.assertFalse(merged["isError"], merged)
         self.assertEqual(merged["structuredContent"]["id"], self.aid)
         self.assertEqual(error_of(call(self.service, "catalog_asset", {"id": self.other}))["code"], "not_found")

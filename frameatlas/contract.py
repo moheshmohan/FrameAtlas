@@ -12,7 +12,8 @@ TIERS = {
         "catalog_picker_sessions", "catalog_picker_queued_items", "catalog_picker_reselection", "catalog_models",
         "catalog_studio_ocr", "catalog_idea_history", "idea_pad_list", "idea_pad_moments", "people_status",
         "people_list", "person_get", "faces_unsorted", "people_suggest", "people_review", "people_compare",
-        "places_list", "places_trips"},
+        "places_list", "places_trips", "agent_activity", "agent_permissions", "catalog_tasks", "catalog_task",
+        "catalog_wait"},
     "write": {
         "catalog_storage_limit", "catalog_retry_speech", "catalog_confirm_studio_download",
         "catalog_cleanup_studio_download", "catalog_cancel", "catalog_queue_control", "catalog_ideas",
@@ -21,7 +22,7 @@ TIERS = {
         "catalog_import_takeout", "catalog_link_takeout_location", "catalog_attach_local", "catalog_batch",
         "idea_pad_add", "idea_pad_update", "idea_pad_develop", "idea_pad_generate", "people_scan",
         "people_regroup", "person_update", "face_assign", "faces_link", "faces_unlink", "people_autosort",
-        "people_review_decide", "people_import_names", "places_import"},
+        "people_review_decide", "people_import_names", "places_import", "agent_undo"},
     "destructive": {
         "idea_pad_delete", "person_merge", "people_forget", "places_forget", "catalog_merge", "catalog_picker_close"},
     "outside": {
@@ -37,6 +38,12 @@ IDEMPOTENT = TIERS["read"] | {
     "catalog_link_takeout_location", "catalog_attach_local", "catalog_cancel", "idea_pad_update",
     "person_update", "faces_link", "faces_unlink", "face_assign", "places_import", "people_forget",
     "places_forget", "idea_pad_delete", "catalog_picker_close", "catalog_import_native"}
+# Tools that can take a while: background: true returns a task to wait on with catalog_wait.
+LONG = {"catalog_ideas", "idea_pad_generate", "idea_pad_develop", "places_import", "people_import_names",
+        "catalog_metadata_backfill", "catalog_import_takeout", "catalog_import_native", "catalog_import_manifest"}
+# Service actions only the owner reaches, through the browser UI: an agent cannot widen its own
+# permissions or approve its own calls.
+OWNER_ONLY = {"permissions_set", "confirmation_decide"}
 # Tools a catalog_batch may run: everything except destructive and outside calls, which need their own call.
 BATCHABLE = (TIERS["read"] | TIERS["write"]) - {"catalog_batch"}
 
@@ -58,6 +65,12 @@ OUTPUT_REQUIRED = {
     "catalog_metadata_coverage": ["providers", "total"],
     "catalog_idea_history": ["items"],
     "catalog_batch": ["results", "ran", "stopped"],
+    "agent_activity": ["items", "total", "pending", "permissions"],
+    "agent_permissions": ["permissions"],
+    "agent_undo": ["undone"],
+    "catalog_tasks": ["items"],
+    "catalog_task": ["id", "tool", "state"],
+    "catalog_wait": ["state", "waited", "finished_waiting"],
     "idea_pad_list": ["items", "total"],
     "idea_pad_moments": ["moments"],
     "people_status": ["faces", "people", "named", "running"],
@@ -150,10 +163,11 @@ def _check(schema, value, path, problems, depth):
 class ToolError(ValueError):
     """A ValueError that names its error code, so agents need not parse the message."""
 
-    def __init__(self, code, message, hint=""):
+    def __init__(self, code, message, hint="", data=None):
         super().__init__(message)
         self.code = code
         self.hint = hint
+        self.data = data
 
 
 # code: (worth retrying unchanged later, what to do next)
@@ -163,6 +177,7 @@ CODES = {
     "not_found": (False, "Look the ID up again (catalog_search, catalog_jobs, people_list, places_list or idea_pad_list)."),
     "invalid": (False, "The request does not fit the catalogue's current state; read the message."),
     "needs_confirmation": (False, "Ask the owner, then repeat the call with confirm: true."),
+    "forbidden": (False, "The owner's permissions do not allow this; ask the owner."),
     "needs_user": (False, "The owner has to act first (for example a fresh Google Photos selection); pass the message on."),
     "busy": (True, "Another local job holds the worker or GPU; retry after it finishes (catalog_jobs, people_status)."),
     "deferred": (True, "The work was put off, not lost; retry later."),
@@ -199,5 +214,7 @@ def classify(exc):
         code = "invalid" if isinstance(exc, (ValueError, TypeError, LookupError)) else \
             "failed" if isinstance(exc, (RuntimeError, OSError)) else "internal"
     retryable, hint = CODES[code]
-    return {"code": code, "message": message, "retryable": retryable,
-            "hint": getattr(exc, "hint", "") or hint}
+    out = {"code": code, "message": message, "retryable": retryable, "hint": getattr(exc, "hint", "") or hint}
+    if isinstance(exc, ToolError) and isinstance(exc.data, dict):
+        out["data"] = exc.data
+    return out

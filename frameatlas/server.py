@@ -17,7 +17,7 @@ READ_ACTIONS = {"search", "asset", "coverage", "stats", "jobs", "job", "resolve"
                 "picker_sessions", "picker_queued_items", "picker_reselection", "compare_sources",
                 "idea_pad", "idea_pad_moments", "metadata_coverage", "people", "person", "people_status",
                 "faces_unsorted", "people_suggest",
-                "people_review", "people_compare", "places", "places_trips"}
+                "people_review", "people_compare", "places", "places_trips", "activity", "permissions", "tasks", "task"}
 
 
 def serve(root=DATA, port=7318):
@@ -101,7 +101,7 @@ def serve(root=DATA, port=7318):
                     else:
                         self.reply(p.read_bytes(), mime="image/jpeg")
                 else:
-                    files = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8"), "/ideapad.js": ("ideapad.js", "text/javascript; charset=utf-8"), "/people.js": ("people.js", "text/javascript; charset=utf-8")}
+                    files = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/style.css": ("style.css", "text/css; charset=utf-8"), "/ideapad.js": ("ideapad.js", "text/javascript; charset=utf-8"), "/people.js": ("people.js", "text/javascript; charset=utf-8"), "/activity.js": ("activity.js", "text/javascript; charset=utf-8")}
                     if path not in files:
                         self.reply({"error": "Not found"}, 404)
                         return

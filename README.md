@@ -170,6 +170,22 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
 - **Batches**: `catalog_batch` runs up to 25 read and write calls in one round trip and stops at
   the first error unless `stop_on_error` is false. Destructive and outside tools need their own call.
 - `people_forget` and `places_forget` need `confirm: true`; ask the owner first.
+- **Permissions**: on the **Activity** page you choose, for each tier (changes, deletes and merges,
+  Google/Insta360/downloads), whether agents may go ahead, must ask in the chat first, must wait for
+  your approval on that page, or may never. Defaults: changes are allowed; deletes and outside calls
+  ask first. A gated call fails with `needs_confirmation` (or `needs_user`) and a token bound to that
+  exact call; the agent tells you what it wants to do and repeats the call with `confirmation` set to
+  the token (single use, 15 minutes). No tool can change the permissions or approve a call: only you
+  can, in the browser.
+- **Activity and undo**: every agent call is logged with its client, tool, tier and outcome
+  (`agent_activity`; reads are hidden unless asked for). Idea additions, edits and deletions, person
+  names and notes, summary and tag corrections, the queue pause, the storage limit and applied sorting
+  proposals can be undone from the page or with `agent_undo`.
+- **Background work**: long tools (story and idea writing, edit sequences, place and name imports,
+  Takeout and manifest imports, metadata backfill) take `background: true` and return a task at once.
+  Face scans, regroups and sorts return one too. `catalog_wait` blocks up to 60 seconds until a task
+  finishes or an analysis job changes state (with MCP progress notifications when the call carries a
+  `progressToken`); `catalog_tasks` and `catalog_task` list and read them.
 
 ### Ideas (the Idea Pad)
 
