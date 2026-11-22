@@ -206,6 +206,19 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
   to try again), `google_read_script` gives the browser step to run, and `google_read_result` takes
   the page's result straight back: a complete read is imported at once, one that stopped early is
   kept to read again. `google_read_plan` shows where it stands, so any agent can carry on.
+- **Who writes**: `catalog_ideas`, `idea_pad_generate` and `idea_pad_develop` take `writer`. `local`
+  (the default) uses your installed Ollama model. `agent` lets the calling model write: the call returns
+  `needs_writing` with the exact prompt, the evidence and a JSON schema, and the agent calls again with
+  `drafts: {prompt_id: its JSON}`. `client` asks the connected client's model through MCP sampling, for
+  clients that offer it. Whoever writes, every shot is checked against the evidence before anything is
+  saved, and the idea records who wrote it (`agent:<client>`). Only text goes out unless the call sets
+  `allow_images` (previews as `frameatlas://preview/{id}`, or as images in a sampling request).
+- **Questions for a supervisor**: `supervisor_queue` lists what the local models were unsure of (people
+  who may be the same, faces that may belong to someone, Google names that matched more than one person)
+  as plain questions with their face images; `supervisor_decide` answers apply or dismiss, logged and
+  undoable.
+- **Asking you in the chat**: when a call needs your yes and the client supports MCP elicitation,
+  FrameAtlas asks you there directly instead of relying on the agent to ask.
 
 ### Ideas (the Idea Pad)
 

@@ -196,6 +196,9 @@ def before(store, tool, args):
         return None
     if tool == "people_review_decide" and args.get("decision") == "apply":
         return {"kind": "review_undo", "id": args.get("id")}
+    ident = str(args.get("id", ""))
+    if tool == "supervisor_decide" and args.get("decision") == "apply" and ident.startswith("people:") and ident[7:].isdigit():
+        return {"kind": "review_undo", "id": int(ident[7:])}
     return None
 
 

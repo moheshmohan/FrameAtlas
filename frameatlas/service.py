@@ -47,7 +47,8 @@ def whole(value):
 
 AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", "confirmation_decide", "tasks", "task", "wait",
                  "ui_show", "ui_select", "ui_state", "ui_report", "ui_poll", "health", "google_read_plan",
-                 "google_read_register", "google_read_next", "google_read_script", "google_read_result", "google_read_reset"}
+                 "google_read_register", "google_read_next", "google_read_script", "google_read_result", "google_read_reset",
+                 "supervisor_queue", "supervisor_decide"}
 
 
 class Service:
@@ -100,6 +101,11 @@ class Service:
             return google_reads.result(self.store, args)
         if action == "google_read_reset":
             return google_reads.reset(self.store, args.get("kind", "places"), args.get("names"))
+        from . import supervisor
+        if action == "supervisor_queue":
+            return supervisor.queue(self.store, args.get("kind", ""), whole(args.get("limit", 10)), whole(args.get("offset", 0)))
+        if action == "supervisor_decide":
+            return supervisor.decide(self.store, args.get("id"), args.get("decision"))
         raise ValueError("Unknown action")
 
     def dispatch(self, action, args):

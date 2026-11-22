@@ -13,6 +13,7 @@ import re
 import time
 
 from .metadata import camera, device_hint, place, when
+from .writer import active
 
 STATUSES = ("idea", "planned", "shooting", "editing", "published", "dropped")
 # manual: written by the owner; generated: from a moment in the metadata; story: from a request
@@ -408,16 +409,18 @@ def _used_moments(db):
 
 def generate(store, model="", count=5, since="", until="", focus="", include_used=False, today=None, kind=""):
     from .ideas import local_models
-    from .ollama_local import request_json
     if type(count) is not int or not 1 <= count <= 10:
         raise ValueError("Ask for 1–10 ideas")
     if not isinstance(include_used, bool):
         raise ValueError("include_used must be boolean")
     focus = _text(focus, 300, "Focus")
-    installed = local_models()
-    if not model:
+    from .writer import active
+    installed = [active()] if active() else local_models()
+    if active():
+        model = active()
+    elif not model:
         model = next((m for m in WRITING_MODELS if m in installed), "")
-    if model and model not in WRITING_MODELS:
+    if model and model not in WRITING_MODELS and not active():
         raise ValueError("Choose one of the supported writing models: " + ", ".join(WRITING_MODELS))
     if not model:
         raise ValueError("Install a local writing model (" + " or ".join(WRITING_MODELS) + ") in Ollama first. No models are downloaded by this app.")
@@ -483,9 +486,8 @@ def generate(store, model="", count=5, since="", until="", focus="", include_use
                "messages": [{"role": "system", "content": system},
                             {"role": "user", "content": json.dumps(request, ensure_ascii=False)}],
                "options": {"temperature": 0.4, "num_predict": 3000, "num_ctx": 16384}}
-    from .resources import gpu_lease
-    with gpu_lease(note="FrameAtlas Idea Pad"):
-        response = request_json("/api/chat", payload, timeout=300)
+    from .writer import chat
+    response = chat(payload, timeout=300, note="FrameAtlas Idea Pad")
     try:
         raw = json.loads(response["message"]["content"])["ideas"]
     except (KeyError, TypeError, ValueError):
@@ -530,7 +532,7 @@ def generate(store, model="", count=5, since="", until="", focus="", include_use
             saved.append(_row(db.execute("SELECT * FROM idea_pad WHERE id=?", (cur.lastrowid,)).fetchone()))
     if not saved:
         raise ValueError("The local model proposed no usable ideas. Nothing was saved; try again or change the dates.")
-    return {"items": saved, "model": model, "moments_considered": len(chosen), "offline": True}
+    return {"items": saved, "model": model, "moments_considered": len(chosen), "offline": active() is None}
 
 
 # ---- stories: ideas built from footage, each with an edit sequence citing indexed shots

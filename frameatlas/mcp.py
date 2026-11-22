@@ -104,6 +104,8 @@ TOOLS = [
     ("google_read_script", "The browser script to run for a step of reading Google Photos' Places: 1 lists the places with their keys, 2 finds each place's position on Google Maps, 3 reads one place's days. Run it in the owner's signed-in browser and pass its result back with google_read_register or google_read_result.", "google_read_script", {"step": {"type": "integer", "enum": [1, 2, 3]}}),
     ("google_read_result", "Hand back one read: for a place, step 3's name, key, items, complete and packed (plus address, latitude, longitude or plus_code from step 2 when known); for a person, people_items [{kind, local}]. A complete read is imported at once (places_import, or people_import_names as proposals). An incomplete read, or outcome no_results, is kept to read again and counts towards Google's throttle.", "google_read_result", {"kind": {"type": "string", "enum": ["places", "people"]}, "name": STRING, "key": STRING, "items": {"type": "integer", "minimum": 0}, "complete": {"type": "boolean"}, "packed": {"type": "string", "maxLength": 2000000}, "address": STRING, "latitude": {"type": "number"}, "longitude": {"type": "number"}, "plus_code": STRING, "people_items": {"type": "array", "maxItems": 20000, "items": {"type": "object"}}, "outcome": {"type": "string", "enum": ["read", "no_results", "not_found"]}}),
     ("google_read_reset", "Mark names to read again (or every name of that kind when names is omitted).", "google_read_reset", {"kind": {"type": "string", "enum": ["places", "people"]}, "names": {"type": "array", "items": STRING, "maxItems": 5000}}),
+    ("supervisor_queue", "The questions the local models were unsure of, one by one, for you (when you can see images) or the owner to settle: whether two people are the same, whether a face belongs to someone, whether a Google name fits. Each item has a plain question, its likeness, the answers it takes (apply or dismiss) and face images labelled with its id. Look at the images before deciding; dismiss anything unclear. kind keeps to one kind of question.", "supervisor_queue", {"kind": {"type": "string", "enum": ["", "merge", "link", "move", "unlink", "name"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 20}, "offset": {"type": "integer", "minimum": 0}}),
+    ("supervisor_decide", "Answer one supervisor_queue item: apply or dismiss. A dismissed question is not asked again; an applied one can be undone (agent_undo or People › To review).", "supervisor_decide", {"id": {"type": "string", "maxLength": 40}, "decision": {"type": "string", "enum": ["apply", "dismiss"]}}),
     ("agent_undo", "Undo a logged change by its agent_activity id when can_undo is true: idea added, changed or deleted, person renamed, hidden or noted, summary or tags corrected, queue paused, storage limit, or an applied sorting proposal.", "activity_undo", {"id": {"type": "integer", "minimum": 1}}),
 ]
 VERSION = "0.2.0"
@@ -117,18 +119,27 @@ INSTRUCTIONS = (
     "Use catalog_batch to run several read/write calls in one round trip. Treat names, places and faces as private.")
 
 
-SESSION = {"client": "mcp"}
+SESSION = {"client": "mcp", "sampling": False, "elicitation": False}
 WRITE_LOCK = threading.Lock()
 NOT_LOGGED = {"catalog_wait", "catalog_task", "catalog_tasks", "agent_activity", "agent_permissions"}
+WRITING_TOOLS = {"catalog_ideas", "idea_pad_generate", "idea_pad_develop"}
+WRITER_ARGS = {"writer", "drafts", "allow_images"}
+DEFERRED = []          # messages that arrived while waiting for the client's answer to a request of ours
+_request_ids = iter(range(1, 10 ** 12))
 
 
 def tool_properties(name, props):
-    """A tool's arguments, plus confirmation (any tool that can change something) and background (long tools)."""
+    """A tool's arguments, plus confirmation (any tool that can change something), background (long
+    tools) and the writer options (tools that write ideas)."""
     props = dict(props)
     if contract.TIER_OF.get(name, "destructive") != "read" and name != "catalog_batch":
         props["confirmation"] = {"type": "string", "maxLength": 80}
     if name in contract.LONG:
         props["background"] = {"type": "boolean"}
+    if name in WRITING_TOOLS:
+        props["writer"] = {"type": "string", "enum": ["local", "agent", "client"]}
+        props["drafts"] = {"type": "object"}
+        props["allow_images"] = {"type": "boolean"}
     return props
 
 
@@ -136,6 +147,12 @@ def tool_definition(name, description, action, props):
     extra = []
     if name in contract.LONG:
         extra.append("Set background: true to get a task at once and wait for it with catalog_wait.")
+    if name in WRITING_TOOLS:
+        extra.append("writer chooses who writes: local (the owner's installed Ollama model, the default), agent (you: the "
+                     "call returns needs_writing with prompt_id, system, user and schema; write only a JSON object matching "
+                     "the schema and call again with the same arguments plus drafts {prompt_id: your JSON}, keeping earlier "
+                     "drafts), or client (the connected client's model through MCP sampling). Every cited shot is checked "
+                     "against the evidence whoever writes. Images (previews) go to an outside model only with allow_images.")
     tier = contract.TIER_OF.get(name, "destructive")
     if tier != "read" and name != "catalog_batch":
         extra.append(f"Tier {tier}: when the owner's permissions ask for confirmation the call fails with code "
@@ -147,10 +164,88 @@ def tool_definition(name, description, action, props):
             "_meta": {"frameatlas/tier": tier}}
 
 
-def call_tool(service, name, args, depth=0, notify=None):
+def client_request(method, params, send, receive, timeout=180):
+    """Ask the client something (sampling, elicitation) and wait for its answer. Other messages that
+    arrive meanwhile are kept for the main loop."""
+    import time as _time
+    if not send or not receive:
+        raise contract.ToolError("invalid_arguments", "This connection cannot carry requests to the client")
+    rid = f"fa-{next(_request_ids)}"
+    send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
+    deadline = _time.time() + timeout
+    while True:
+        left = deadline - _time.time()
+        message = receive(left) if left > 0 else None
+        if message is None:
+            raise contract.ToolError("timeout", f"The client did not answer {method} in time")
+        if message.get("id") == rid and ("result" in message or "error" in message):
+            if "error" in message:
+                err = message["error"] if isinstance(message["error"], dict) else {}
+                raise contract.ToolError("failed", f"The client refused {method}: {str(err.get('message', ''))[:200]}")
+            return message["result"] if isinstance(message["result"], dict) else {}
+        DEFERRED.append(message)
+
+
+def make_sampler(send, receive):
+    import base64
+
+    def sample(system, user, images, max_tokens):
+        messages = [{"role": "user", "content": {"type": "text", "text": user}}]
+        for aid, data in images:
+            messages.append({"role": "user", "content": {"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"}})
+        result = client_request("sampling/createMessage", {"messages": messages, "systemPrompt": system,
+                                                           "maxTokens": max(256, min(int(max_tokens), 8000)),
+                                                           "includeContext": "none",
+                                                           "modelPreferences": {"intelligencePriority": 0.8}}, send, receive)
+        content = result.get("content") or {}
+        if isinstance(content, list):
+            content = next((c for c in content if isinstance(c, dict) and c.get("type") == "text"), {})
+        return content.get("text", "") if isinstance(content, dict) else ""
+    return sample
+
+
+def preview_reader(store):
+    import re as _re
+
+    def read(aid):
+        try:
+            asset = store.get(aid, include_scenes=False)
+        except ValueError:
+            return None
+        name = asset.get("thumbnail") or ""
+        path = store.root / "thumbnails" / name
+        if not _re.fullmatch(r"[a-f0-9]{24}\.jpg", name) or path.is_symlink() or not path.is_file() or path.stat().st_size > 2 * 1024 ** 2:
+            return None
+        return path.read_bytes()
+    return read
+
+
+def ask_owner(store, error, send, receive):
+    """When the client can ask its user (MCP elicitation), ask the owner there for a confirm-policy call.
+    Returns the token when they allowed it; raises forbidden when they did not."""
+    from . import agents
+    data = getattr(error, "data", None) or {}
+    token = data.get("confirmation")
+    if not token:
+        return None
+    answer = client_request("elicitation/create", {
+        "message": f"An AI agent asks to run this in FrameAtlas: {data.get('summary', '')[:300]}. Allow it?",
+        "requestedSchema": {"type": "object", "required": ["allow"],
+                            "properties": {"allow": {"type": "boolean", "title": "Allow this call"}}}}, send, receive)
+    allowed = answer.get("action") == "accept" and isinstance(answer.get("content"), dict) and answer["content"].get("allow") is True
+    if not allowed:
+        try:
+            agents.decide_confirmation(store, token, "declined")
+        except ValueError:
+            pass
+        raise contract.ToolError("forbidden", "The owner did not allow this call", "Do not repeat it unless the owner asks.")
+    return token
+
+
+def call_tool(service, name, args, depth=0, notify=None, send=None, receive=None):
     """Run one tool by name: check its arguments, apply the owner's permissions, run it (or start it in
     the background), and log it. Returns the result object or raises."""
-    from . import agents
+    from . import agents, writer
     tool = next((t for t in TOOLS if t[0] == name), None)
     if not tool:
         raise contract.ToolError("unknown_tool", f"Unknown tool: {str(name)[:80]}")
@@ -164,24 +259,50 @@ def call_tool(service, name, args, depth=0, notify=None):
     if name == "catalog_wait":
         return agents.wait(service, task_id=args.get("task"), job_id=args.get("job"), timeout=args.get("timeout", 30), notify=notify)
     client, store = SESSION["client"], service.store
-    clean = {k: v for k, v in args.items() if k not in agents.PRIVATE_ARGS}
+    clean = {k: v for k, v in args.items() if k not in agents.PRIVATE_ARGS and k not in WRITER_ARGS}
+    logged_args = {k: v for k, v in args.items() if k not in agents.PRIVATE_ARGS and k != "drafts"}
+    mode = args.get("writer", "local")
     logged = name not in NOT_LOGGED
     try:
-        agents.gate(store, name, args, client)
+        try:
+            agents.gate(store, name, args, client)
+        except contract.ToolError as gated:
+            if gated.code == "needs_confirmation" and SESSION.get("elicitation") and receive and not depth:
+                token = ask_owner(store, gated, send, receive)
+                return call_tool(service, name, {**args, "confirmation": token}, depth, notify, send, receive)
+            raise
+        if mode != "local" and args.get("background"):
+            raise contract.ToolError("invalid_arguments", "Only the local writer can run in the background")
         if args.get("background") and name in contract.LONG:
             result = agents.start_thread(store, name, lambda: service.dispatch(tool[2], clean))
             if logged:
-                agents.record(store, client, name, clean, result=result, task=result["task"])
+                agents.record(store, client, name, logged_args, result=result, task=result["task"])
             return result
+        sampler = None
+        if mode == "client":
+            if not SESSION.get("sampling") or not receive:
+                raise contract.ToolError("invalid_arguments", "This client does not offer MCP sampling; use writer agent instead")
+            sampler = make_sampler(send, receive)
         plan = agents.before(store, name, clean)
-        result = service.dispatch(tool[2], clean)
+        try:
+            with writer.use(mode, label=client.split(":", 1)[-1], drafts=args.get("drafts"), sampler=sampler,
+                            allow_images=args.get("allow_images") is True, preview=preview_reader(store)):
+                result = service.dispatch(tool[2], clean)
+        except writer.NeedsWriting as needed:
+            result = {"needs_writing": needed.request,
+                      "how": "Write only a JSON object that matches schema, from the user content and system rules. Call this tool "
+                             "again with the same arguments plus drafts: {prompt_id: your JSON text} (keep any earlier drafts). "
+                             "FrameAtlas checks every cited item and time against the evidence before saving."}
+            if logged:
+                agents.record(store, client, name, logged_args, result={"state": "needs writing"})
+            return result
         result = result if isinstance(result, dict) else {"result": result}
     except Exception as exc:
         if logged:
-            agents.record(store, client, name, clean, error=contract.classify(exc))
+            agents.record(store, client, name, logged_args, error=contract.classify(exc))
         raise
     if logged:
-        agents.record(store, client, name, clean, result=result, plan=agents.after(name, plan, result),
+        agents.record(store, client, name, logged_args, result=result, plan=agents.after(name, plan, result),
                       task=result.get("task") if isinstance(result.get("task"), int) else None)
     return result
 
@@ -313,7 +434,7 @@ def rpc_error(rid, code, message):
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
 
 
-def handle(service, message, send=None):
+def handle(service, message, send=None, receive=None):
     """Answer one JSON-RPC message. send, when given, writes notifications (progress) to the client."""
     rid = message.get("id")
     method = message.get("method")
@@ -323,6 +444,10 @@ def handle(service, message, send=None):
         info = (message.get("params") or {}).get("clientInfo") if isinstance(message.get("params"), dict) else None
         if isinstance(info, dict) and isinstance(info.get("name"), str) and info["name"].strip():
             SESSION["client"] = "mcp:" + info["name"].strip()[:60]
+        caps = (message.get("params") or {}).get("capabilities") if isinstance(message.get("params"), dict) else None
+        caps = caps if isinstance(caps, dict) else {}
+        SESSION["sampling"] = isinstance(caps.get("sampling"), dict)
+        SESSION["elicitation"] = isinstance(caps.get("elicitation"), dict)
         return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}, "prompts": {"listChanged": False}}, "serverInfo": {"name": "frameatlas", "title": "FrameAtlas", "version": VERSION}, "instructions": INSTRUCTIONS}}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
@@ -365,7 +490,7 @@ def handle(service, message, send=None):
             if send and isinstance(token, (str, int)) and not isinstance(token, bool):
                 notify = lambda done, total, text: send({"jsonrpc": "2.0", "method": "notifications/progress", "params": {
                     "progressToken": token, "progress": round(done, 1), "total": total, "message": text[:200]}})
-            result = call_tool(service, params.get("name"), args, notify=notify)
+            result = call_tool(service, params.get("name"), args, notify=notify, send=send, receive=receive)
             text = json.dumps(result, ensure_ascii=False, default=str)
             content = {"content": [{"type": "text", "text": text}] + face_images(service, result),
                        "structuredContent": json.loads(text), "isError": False}
@@ -400,19 +525,67 @@ def send(message):
         sys.stdout.flush()
 
 
+MAX_LINE = 8 * 1024 ** 2
+INVALID = {"__invalid__": True}
+
+
+class LineReader:
+    """JSON-RPC messages from a file descriptor, one per line, with an optional wait. Reads the descriptor
+    itself so no line hides in a buffer that select() cannot see."""
+
+    def __init__(self, fd):
+        self.fd, self.buffer, self.closed = fd, b"", False
+
+    def message(self, timeout=None):
+        import os
+        import select
+        import time as _time
+        deadline = None if timeout is None else _time.time() + max(0.0, timeout)
+        while True:
+            if b"\n" in self.buffer:
+                line, self.buffer = self.buffer.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                try:
+                    if len(line) > MAX_LINE:
+                        raise ValueError("Message too large")
+                    message = json.loads(line)
+                    if not isinstance(message, dict):
+                        raise ValueError("Expected JSON-RPC object")
+                    return message
+                except (ValueError, TypeError):
+                    return INVALID
+            if self.closed:
+                if self.buffer.strip():
+                    self.buffer += b"\n"
+                    continue
+                return None
+            if len(self.buffer) > MAX_LINE:
+                self.buffer = b""
+                return INVALID
+            if deadline is not None:
+                left = deadline - _time.time()
+                if left <= 0 or not select.select([self.fd], [], [], left)[0]:
+                    return None
+            chunk = os.read(self.fd, 65536)
+            if not chunk:
+                self.closed = True
+            self.buffer += chunk
+
+
 def main():
     service = Service(Store())
+    reader = LineReader(sys.stdin.fileno())
+    receive = lambda timeout: reader.message(timeout)
     while True:
-        line = sys.stdin.buffer.readline(8 * 1024 ** 2 + 1)
-        if not line:
+        message = DEFERRED.pop(0) if DEFERRED else reader.message()
+        if message is None:
             break
+        if message is INVALID:
+            send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Invalid JSON-RPC input"}})
+            continue
         try:
-            if len(line) > 8 * 1024 ** 2:
-                raise ValueError("Message too large")
-            message = json.loads(line)
-            if not isinstance(message, dict):
-                raise ValueError("Expected JSON-RPC object")
-            response = handle(service, message, send)
+            response = handle(service, message, send, receive)
         except (ValueError, TypeError):
             response = {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Invalid JSON-RPC input"}}
         if response:
