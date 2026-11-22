@@ -49,7 +49,8 @@ AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", 
                  "ui_show", "ui_select", "ui_state", "ui_report", "ui_poll", "health", "google_read_plan",
                  "google_read_register", "google_read_next", "google_read_script", "google_read_result", "google_read_reset",
                  "supervisor_queue", "supervisor_decide", "footage_record", "footage_videos", "footage_forget",
-                 "idea_to_autocut", "footage_import_project"}
+                 "idea_to_autocut", "footage_import_project", "places_tidy", "person_details", "person_timeline",
+                 "calendar", "calendar_set"}
 
 
 class Service:
@@ -121,6 +122,17 @@ class Service:
                                            args.get("paths"), args.get("build", True) is not False, args.get("name", ""))
         if action == "footage_import_project":
             return autocut_handoff.import_project(self.store, args.get("project"), args.get("title", ""), args.get("idea_id"))
+        if action == "places_tidy":
+            return places.tidy(self.store)
+        from . import family
+        if action == "person_details":
+            return family.set_details(self.store, whole(args.get("id")), args.get("relation"), args.get("born"))
+        if action == "person_timeline":
+            return family.timeline(self.store, whole(args.get("id")))
+        if action == "calendar":
+            return family.occasions(self.store)
+        if action == "calendar_set":
+            return family.set_occasions(self.store, args.get("occasions"))
         raise ValueError("Unknown action")
 
     def dispatch(self, action, args):

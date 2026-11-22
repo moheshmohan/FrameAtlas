@@ -13,7 +13,7 @@ function setIdeaMode(mode){
  $$('[data-idea-form]').forEach(f=>f.classList.toggle('hidden',f.dataset.ideaForm!==mode));
  try{localStorage.setItem('frameatlas.ideaMode',mode)}catch{}
 }
-const MOMENT_KINDS={trip:'✈ Trip',day_out:'⌂ Day out',return:'↺ Return visit'};
+const MOMENT_KINDS={trip:'✈ Trip',day_out:'⌂ Day out',return:'↺ Return visit',occasion:'✦ Occasion'};
 function tripLine(m){
  const t=m.trip;if(!t||!MOMENT_KINDS[m.kind])return'';
  const bits=[m.kind==='return'?(t.years||[]).join(', '):`${m.days} day${m.days===1?'':'s'}`];

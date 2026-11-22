@@ -245,6 +245,7 @@ def import_places(store, source, places):
                 db.execute("INSERT OR REPLACE INTO place_days(place_id,day,items,first,last) VALUES(?,?,?,?,?)",
                            (pid, first.date().isoformat(), items, utc_first, utc_last))
                 out["days"] += 1
+        out["overlaps_tidied"] = tidy_overlaps(db)
     return out
 
 
@@ -343,14 +344,81 @@ def _areas(places):
     return areas, of
 
 
+# Items that came from someone else's phone (sent or saved), which do not show where the owner was.
+SHARED_DEVICES = {"WhatsApp (sent or received)", "Facebook Messenger", "Facebook download", "Screenshot"}
+
+
+def shared_only_days(db):
+    """(place id, day) pairs whose catalogued items there are all from someone else's phone. A day
+    whose items the catalogue does not have is not counted here: nothing says it was shared."""
+    from .metadata import device_hint
+    seen = defaultdict(lambda: [0, 0])  # (place, day) -> [items, shared items]
+    for pid, day, filename in db.execute("""SELECT d.place_id, d.day, a.filename FROM place_days d
+            JOIN asset_places ap ON ap.place_id=d.place_id JOIN assets a ON a.id=ap.asset_id
+            WHERE d.first<>'' AND substr(a.captured,1,19) BETWEEN d.first AND d.last"""):
+        hint = device_hint(filename)
+        counts = seen[(pid, day)]
+        counts[0] += 1
+        counts[1] += bool(hint and hint["label"] in SHARED_DEVICES)
+    return {key for key, (n, shared) in seen.items() if n and n == shared}
+
+
 def _load(store):
     with store.connect() as db:
         places = [dict(r) for r in db.execute("""SELECT p.id, p.name, p.country, p.latitude, p.longitude,
             COALESCE((SELECT sum(items) FROM place_days d WHERE d.place_id=p.id),0) AS items
             FROM places p WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL""")]
-        days = db.execute("""SELECT d.place_id, d.day, d.items FROM place_days d JOIN places p ON p.id=d.place_id
+        days = db.execute("""SELECT d.place_id, d.day, d.items, d.first, d.last FROM place_days d JOIN places p ON p.id=d.place_id
             WHERE p.latitude IS NOT NULL AND p.longitude IS NOT NULL""").fetchall()
-    return places, days
+        shared = shared_only_days(db)
+    return places, [r for r in days if (r[0], r[1]) not in shared], len(shared)
+
+
+FLIGHT_KMH = 900          # nobody gets between two places faster than this
+CONFLICT_KM = 300         # places closer than this can share a day's hours
+SHORT_RUN_DAYS = 3        # a run of away days this short, overlapping home's hours every day, is someone else's
+
+
+def _windows(rows):
+    out = defaultdict(list)
+    for r in rows:
+        try:
+            if r["first"] and r["last"]:
+                out[r["day"]].append((r["place_id"], datetime.fromisoformat(r["first"]), datetime.fromisoformat(r["last"])))
+        except (ValueError, IndexError, KeyError):
+            continue
+    return out
+
+
+def tidy_overlaps(db):
+    """An item inside two places' windows on the same day keeps the place with the narrower window (the
+    more specific stop); places with equally narrow windows both stay."""
+    rows = db.execute("""SELECT ap.asset_id, ap.place_id, d.first, d.last FROM asset_places ap
+        JOIN assets a ON a.id=ap.asset_id JOIN place_days d ON d.place_id=ap.place_id
+        WHERE d.first<>'' AND substr(a.captured,1,19) BETWEEN d.first AND d.last
+          AND ap.asset_id IN (SELECT asset_id FROM asset_places GROUP BY asset_id HAVING count(*) > 1)""").fetchall()
+    windows = defaultdict(dict)
+    for aid, pid, first, last in rows:
+        try:
+            width = (datetime.fromisoformat(last) - datetime.fromisoformat(first)).total_seconds()
+        except ValueError:
+            continue
+        windows[aid][pid] = min(width, windows[aid].get(pid, width))
+    removed = 0
+    for aid, by_place in windows.items():
+        if len(by_place) < 2:
+            continue
+        narrowest = min(by_place.values())
+        for pid, width in by_place.items():
+            if width > narrowest:
+                removed += db.execute("DELETE FROM asset_places WHERE asset_id=? AND place_id=?", (aid, pid)).rowcount
+    return removed
+
+
+def tidy(store):
+    with store.connect() as db:
+        db.execute("BEGIN IMMEDIATE")
+        return {"labels_removed": tidy_overlaps(db)}
 
 
 def trips(store, since="", until="", kind="", limit=200):
@@ -361,14 +429,15 @@ def trips(store, since="", until="", kind="", limit=200):
         raise ValueError("Use a limit of 1–1000")
     start = date.fromisoformat(since) if since else None
     end = date.fromisoformat(until) if until else None
-    places, rows = _load(store)
+    places, rows, shared_days = _load(store)
+    windows = _windows(rows)
     if not places or not rows:
-        return {"trips": [], "located_days": 0, "areas": 0}
+        return {"trips": [], "located_days": 0, "areas": 0, "shared_days_left_out": shared_days}
     areas, of = _areas(places)
     by_id = {p["id"]: p for p in places}
     per_day = defaultdict(Counter)   # day -> area id -> items
     place_day = defaultdict(Counter) # day -> place id -> items
-    for pid, day, items in rows:
+    for pid, day, items, *_ in rows:
         try:
             d = date.fromisoformat(day)
         except ValueError:
@@ -408,9 +477,25 @@ def trips(store, since="", until="", kind="", limit=200):
         current.append((d, far))
     if current:
         runs.append(current)
-    out = []
+    def impossible(d):
+        """Photos at home and far away in hours no one could travel between: the far ones are someone else's."""
+        h = home[d]
+        here = [(pid, f, l) for pid, f, l in windows.get(d.isoformat(), ()) if of[pid]["id"] == h]
+        there = [(pid, f, l) for pid, f, l in windows.get(d.isoformat(), ()) if of[pid]["id"] != h]
+        for pa, fa, la in here:
+            for pb, fb, lb in there:
+                distance = km((by_id[pa]["latitude"], by_id[pa]["longitude"]), (by_id[pb]["latitude"], by_id[pb]["longitude"]))
+                gap = max(0.0, (max(fa, fb) - min(la, lb)).total_seconds() / 3600)
+                if distance >= CONFLICT_KM and gap * FLIGHT_KMH < distance * 0.8:
+                    return True
+        return False
+
+    out, someone_else = [], 0
     for run in runs:
         first, last = run[0][0], run[-1][0]
+        if len(run) <= SHORT_RUN_DAYS and all(impossible(d) for d, _ in run):
+            someone_else += 1
+            continue
         h = areas[home[first]]
         span = (last - first).days + 1
         distance = max(k for _, (k, _) in run)
@@ -460,4 +545,5 @@ def trips(store, since="", until="", kind="", limit=200):
     if kind:
         every = [t for t in every if t["kind"] == kind]
     every.sort(key=lambda t: t["start"], reverse=True)
-    return {"trips": every[:limit], "total": len(every), "located_days": len(located), "areas": len(areas)}
+    return {"trips": every[:limit], "total": len(every), "located_days": len(located), "areas": len(areas),
+            "shared_days_left_out": shared_days, "runs_left_out_as_someone_elses": someone_else}

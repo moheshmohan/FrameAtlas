@@ -237,7 +237,9 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
 - **✧ From moments**: a local writing model proposes ideas from *moments* the metadata shows:
   trips away from home, days out nearby and places you keep going back to (once places are
   imported, see below), days or runs of days with far more footage than usual, days with 360
-  recordings or several videos, and days whose anniversary comes up in the next three weeks. Each moment carries its
+  recordings or several videos, festivals, holidays and birthdays from your calendar (`calendar_set`:
+  fixed dates, or festivals such as Onam or Eid listed year by year; named people's birthdays come
+  from their born dates), and days whose anniversary comes up in the next three weeks. Each moment carries its
   counts, devices, places, named people, tags and a few analysed items' descriptions. The model
   picks a moment, writes a title, a logline and why it is worth making now, and chooses shots from
   that moment only; **Footage from these days →** opens them in the Library. Moments that already
@@ -283,6 +285,13 @@ its places, and choosing one lists everything there; `catalog_search` takes `pla
 takes its time zone from the nearest place within 500 km whose zone is known; every place keeps
 the zone its own items gave it.
 
+Photos that came from someone else's phone do not make trips. A place-day whose catalogued items are
+all WhatsApp, Messenger or Facebook downloads or screenshots is left out. So is a short run of up to
+three days "away" whose photos every day fall in hours when there are also photos at home too far
+away to travel between (family sending pictures from far away). Real trips stay, even if someone at
+home sent photos meanwhile. An item inside two places' windows on one day keeps only the place with
+the narrower window, the more specific stop (`places_tidy` does this for places imported before).
+
 ### People
 
 **People** (in the sidebar) finds the faces in your media and groups them into people you can
@@ -315,6 +324,10 @@ Agents sort faces the same way: `people_autosort` (propose, or `apply`), `people
 `people_review_decide` (apply, dismiss, undo), and `people_compare`, which returns the face crops
 as images so a model that can see can judge a merge or a link by eye. `people_import_names` takes
 another library's named people as `{name, items: [{kind, local}]}`.
+- **Relations and birthdays**: `person_details` records how someone is related to you ("our son") and
+  when they were born. Idea writing uses the relation exactly as given, and birthdays join the calendar.
+  `person_timeline` shows a person's years in the media (with their age), examples and who they appear
+  with most.
 - **Hide** a passer-by without deleting anything. Groups of fewer than three faces get no person.
 - **Media →** opens the Library filtered to that person; MCP's `catalog_search` takes `person`
   (one ID, or several for items with all of them). Named people appear in the Idea Pad's moments
