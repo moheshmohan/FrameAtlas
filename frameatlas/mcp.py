@@ -1,6 +1,7 @@
 """MCP over stdio. Uses the same service and database as the human UI."""
 import json
 import sys
+from . import contract
 from .ideas import STORY_SEARCH_KEYS
 from .idea_pad import FORMATS as IDEA_FORMATS, STATUSES as IDEA_STATUSES, WRITING_MODELS
 from .store import SPEECH_PASS_STATES, Store
@@ -82,7 +83,61 @@ TOOLS = [
     ("catalog_picker_close", "Close a finished Picker session after its analysis jobs finish.", "picker_delete", {"session": STRING}),
     ("catalog_attach_local", "Explicitly associate an existing original with an asset, read-only; never copy or delete that file.", "attach_local", {"id": STRING, "path": STRING}),
     ("catalog_models", "Report installed local scene/speech/writing models without downloading anything.", "models", {}),
+    ("catalog_idea_history", "Read the last 12 story-idea runs (catalog_ideas): prompt, result and when.", "idea_history", {}),
+    ("catalog_merge", "Merge two inventory records of the same provider that the owner confirmed are one item: keep gains the other's metadata and links, and duplicate is deleted. Only for records never analysed or queued. Cannot be undone.", "merge", {"keep": STRING, "duplicate": STRING}),
+    ("places_forget", "Delete every imported place and its days and item labels for a source. Items and analysis stay. Ask the owner first, then call with confirm: true. Cannot be undone; re-import the places to restore them.", "places_forget", {"source": {"type": "string", "enum": ["google_photos"]}, "confirm": {"type": "boolean"}}),
+    ("people_forget", "Delete every face, person, name and correction (the face crops too). Items and analysis stay. Ask the owner first, then call with confirm: true. Cannot be undone; a new scan finds faces again but names are lost.", "people_forget", {"confirm": {"type": "boolean"}}),
+    ("catalog_batch", "Run up to 25 read and write tool calls in order, in one round trip. Stops at the first error unless stop_on_error is false. Destructive tools and tools that reach Google or Insta360 are not allowed here; call them on their own. Calls are not one transaction: earlier changes stay when a later call fails. Face images are not returned; call people_compare on its own to see them.", None, {"calls": {"type": "array", "minItems": 1, "maxItems": 25, "items": {"type": "object", "required": ["tool"], "additionalProperties": False, "properties": {"tool": STRING, "arguments": {"type": "object"}}}}, "stop_on_error": {"type": "boolean"}}),
 ]
+VERSION = "0.2.0"
+INSTRUCTIONS = (
+    "FrameAtlas is a local catalogue of the owner's photos and videos (scene descriptions, transcripts, people, "
+    "places, trips, video ideas). All media inference is local. Each tool's annotations give its risk: readOnlyHint "
+    "tools change nothing; destructiveHint tools delete or merge (ask the owner first); openWorldHint tools reach "
+    "Google Photos or Insta360 or download media. Errors come back as JSON {error: {code, message, retryable, hint}}. "
+    "Coverage is partial: read catalog_stats or catalog_coverage before claiming something is not in the library. "
+    "A UI or worker process must run for queued jobs; read catalog_jobs. Model descriptions need checking. "
+    "Use catalog_batch to run several read/write calls in one round trip. Treat names, places and faces as private.")
+
+
+def tool_definition(name, description, action, props):
+    return {"name": name, "title": name.replace("_", " ").capitalize(), "description": description,
+            "inputSchema": {"type": "object", "properties": props, "additionalProperties": False},
+            "outputSchema": contract.output_schema(name),
+            "annotations": contract.annotations(name, name.replace("_", " ").capitalize()),
+            "_meta": {"frameatlas/tier": contract.TIER_OF.get(name, "destructive")}}
+
+
+def call_tool(service, name, args, depth=0):
+    """Run one tool by name with checked arguments; returns its result object or raises."""
+    tool = next((t for t in TOOLS if t[0] == name), None)
+    if not tool:
+        raise contract.ToolError("unknown_tool", f"Unknown tool: {str(name)[:80]}")
+    problems = contract.check({"type": "object", "properties": tool[3], "additionalProperties": False}, args)
+    if problems:
+        raise contract.ToolError("invalid_arguments", "Invalid arguments: " + "; ".join(problems))
+    if name == "catalog_batch":
+        if depth:
+            raise contract.ToolError("invalid_arguments", "catalog_batch cannot run inside catalog_batch")
+        return run_batch(service, args)
+    result = service.dispatch(tool[2], args)
+    return result if isinstance(result, dict) else {"result": result}
+
+
+def run_batch(service, args):
+    results, stop = [], args.get("stop_on_error", True)
+    for call in args["calls"]:
+        name, arguments = call["tool"], call.get("arguments", {})
+        try:
+            if name not in contract.BATCHABLE and any(t[0] == name for t in TOOLS):
+                raise contract.ToolError("invalid_arguments", f"{name} cannot run in a batch; call it on its own",
+                                         "Destructive tools and tools that reach Google or Insta360 need their own call.")
+            results.append({"tool": name, "ok": True, "result": call_tool(service, name, arguments, depth=1)})
+        except Exception as exc:
+            results.append({"tool": name, "ok": False, "error": contract.classify(exc)})
+            if stop:
+                break
+    return {"results": results, "ran": len(results), "stopped": len(results) < len(args["calls"])}
 
 
 def handle(service, message):
@@ -91,25 +146,27 @@ def handle(service, message):
     if rid is None:
         return None
     if method == "initialize":
-        return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "frameatlas", "version": "0.1.0"}, "instructions": "All inference is local. Start the local app worker to process queued jobs. Inventory coverage is partial; consult catalog_stats. Model descriptions require verification."}}
+        return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "frameatlas", "title": "FrameAtlas", "version": VERSION}, "instructions": INSTRUCTIONS}}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": [{"name": n, "description": d, "inputSchema": {"type": "object", "properties": p, "additionalProperties": False}} for n, d, a, p in TOOLS]}}
+        return {"jsonrpc": "2.0", "id": rid, "result": {"tools": [tool_definition(*t) for t in TOOLS]}}
     if method == "tools/call":
         try:
-            params = message.get("params", {})
-            name = params.get("name")
-            tool = next((t for t in TOOLS if t[0] == name), None)
-            if not tool:
-                raise ValueError("Unknown tool")
-            args = params.get("arguments", {})
-            if not isinstance(args, dict) or set(args) - set(tool[3]):
-                raise ValueError("Invalid arguments")
-            result = service.dispatch(tool[2], args)
-            content = {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}] + face_images(service, result), "isError": False}
+            params = message.get("params") or {}
+            if not isinstance(params, dict):
+                raise contract.ToolError("invalid_arguments", "params must be an object")
+            args = params.get("arguments")
+            args = {} if args is None else args
+            if not isinstance(args, dict):
+                raise contract.ToolError("invalid_arguments", "Invalid arguments: arguments must be an object")
+            result = call_tool(service, params.get("name"), args)
+            text = json.dumps(result, ensure_ascii=False, default=str)
+            content = {"content": [{"type": "text", "text": text}] + face_images(service, result),
+                       "structuredContent": json.loads(text), "isError": False}
         except Exception as exc:
-            content = {"content": [{"type": "text", "text": str(exc)[:1500]}], "isError": True}
+            error = contract.classify(exc)
+            content = {"content": [{"type": "text", "text": json.dumps({"error": error}, ensure_ascii=False)}], "isError": True}
         return {"jsonrpc": "2.0", "id": rid, "result": content}
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "Method not found"}}
 

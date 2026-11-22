@@ -7,6 +7,7 @@ import signal
 import threading
 from urllib.parse import urlparse, parse_qs
 
+from .contract import classify
 from .store import Store, DATA
 from .service import Service
 from .worker import Worker, WorkerBusy
@@ -107,7 +108,7 @@ def serve(root=DATA, port=7318):
                     name, mime = files[path]
                     self.reply((STATIC / name).read_bytes(), mime=mime)
             except (ValueError, TypeError, OSError) as exc:
-                self.reply({"error": str(exc)[:1000]}, 400)
+                self.reply({"error": str(exc)[:1000], "code": classify(exc)["code"]}, 400)
             except Exception:
                 self.reply({"error": "Request failed safely. Check the local service and try again."}, 500)
 
@@ -135,7 +136,7 @@ def serve(root=DATA, port=7318):
                 result = service.dispatch(path[5:], args)
                 self.reply(result)
             except (ValueError, TypeError, OSError) as exc:
-                self.reply({"error": str(exc)[:1500]}, 400)
+                self.reply({"error": str(exc)[:1500], "code": classify(exc)["code"]}, 400)
             except Exception as exc:
                 self.reply({"error": "Operation failed safely: " + str(exc)[:800]}, 500)
 

@@ -151,6 +151,26 @@ to run the restored web app. Checksums detect accidental corruption, not malicio
 - Responsive browser interface, JSON metadata export, source provenance, import coverage and storage use.
 - Stdio MCP tools use the same implementation as the UI. See `.mcp.json`.
 
+### For agents: the MCP contract
+
+Every action in the browser UI is also an MCP tool (a test fails if one is missing), so an LLM
+client can run the whole app. `tools/list` tells it how far it can trust each tool:
+
+- **Annotations**: `readOnlyHint` (changes nothing), `destructiveHint` (deletes or merges records:
+  `idea_pad_delete`, `person_merge`, `people_forget`, `places_forget`, `catalog_merge`,
+  `catalog_picker_close`) and `openWorldHint` (reaches Google Photos or Insta360, or downloads
+  media). `_meta["frameatlas/tier"]` names the tier: `read`, `write`, `destructive` or `outside`.
+- **Checked input**: arguments are checked against the tool's `inputSchema` before anything runs,
+  and every problem is named (`arguments.limit must be an integer`).
+- **Structured output**: each result is a JSON object, returned as text and as `structuredContent`;
+  `outputSchema` lists the keys always present.
+- **Typed errors**: a failed call returns `{"error": {"code", "message", "retryable", "hint"}}`. Codes
+  include `invalid_arguments`, `not_found`, `needs_confirmation`, `needs_user`, `busy`, `timeout`,
+  `missing_model`, `stale` and `failed`. The HTTP API adds the same `code` to its error replies.
+- **Batches**: `catalog_batch` runs up to 25 read and write calls in one round trip and stops at
+  the first error unless `stop_on_error` is false. Destructive and outside tools need their own call.
+- `people_forget` and `places_forget` need `confirm: true`; ask the owner first.
+
 ### Ideas (the Idea Pad)
 
 **Ideas** (in the sidebar) is one pad for every video idea, whichever way it started:
@@ -187,9 +207,10 @@ page groups located photos by place. An agent reads it in your own signed-in bro
 Google's place key, each place's position and address from Google Maps, and for every day there
 the local time of the first and last item and how many there were. `places_import` keeps that,
 finds each place's time zone by matching those items to the catalogue to the second, and labels
-the items taken there between a day's first and last item. Read a few places at a time: Google
-stops returning results after roughly 25,000 photos scrolled, for an hour or so. Reading a place
-again replaces the days it lists and keeps the rest.
+the items taken there between a day's first and last item. Read a few places at a time: after
+roughly 25–55 place searches Google returns "No results", or only the first ~50 photos, for about
+an hour; the script reports `complete: false` for a read that did not reach the end. Reading a
+place again replaces the days it lists and keeps the rest.
 
 **Trips, days out and return visits** on the Ideas page read those days back. Places within
 30 km form an area; home is the area you were in on most days within four months of each date

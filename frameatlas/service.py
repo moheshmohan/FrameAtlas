@@ -5,6 +5,7 @@ from pathlib import Path
 import time
 from urllib.parse import quote
 
+from .contract import ToolError
 from . import importers, ideas
 from . import idea_pad, metadata as capture_info, people, places
 from .metadata import picker_camera
@@ -150,11 +151,11 @@ class Service:
             return places.trips(self.store, args.get("since", ""), args.get("until", ""), args.get("kind", ""), whole(args.get("limit", 200)))
         if action == "places_forget":
             if args.get("confirm") is not True:
-                raise ValueError("Pass confirm: true to delete every imported place")
+                raise ToolError("needs_confirmation", "Pass confirm: true to delete every imported place")
             return places.forget(self.store, args.get("source", "google_photos"))
         if action == "people_forget":
             if args.get("confirm") is not True:
-                raise ValueError("Pass confirm: true to delete every face and person")
+                raise ToolError("needs_confirmation", "Pass confirm: true to delete every face and person")
             return people.forget(self.store)
         if action == "metadata_coverage":
             return capture_info.coverage(self.store)
