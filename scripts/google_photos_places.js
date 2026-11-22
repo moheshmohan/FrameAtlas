@@ -1,8 +1,10 @@
 // Read Google Photos' Places in the owner's own signed-in browser, for FrameAtlas `places_import`.
 // Nothing here talks to FrameAtlas: an agent runs each step in a browser tab (for example with
 // Claude in Chrome's javascript tool), reads the small result, and passes it to places_import.
-// Google throttles long reads (searches start returning "No results" after roughly 25,000 photos
-// scrolled), so read a few places at a time and spread a whole library over a few hours.
+// Google throttles searches (after roughly 25–55 place searches, fewer for big places, searches
+// return "No results" or only the first ~50 photos for about an hour), so read a few places at a
+// time and spread a whole library over a few hours. Step 3 says `complete: false` when it could
+// not reach the end of a place's photos; read that place again later.
 //
 // Step 1, on https://photos.google.com/places: list the places with Google's place key.
 //   Result: [[name, key], ...], also kept in sessionStorage.frameatlasPlaces.
@@ -98,21 +100,31 @@
   }
   for (let k = 0; k < 60 && !document.querySelector(sel); k++) await S(250);
   if (/No results/.test(document.body.innerText) && !document.querySelector(sel)) return { name: NAME, error: 'No results: Google is throttling; wait an hour' };
-  let el = null, best = 0;
-  for (const e of document.querySelectorAll('c-wiz,div')) {
-    const d = e.scrollHeight - e.clientHeight;
-    if (d > best && e.clientHeight > 300 && /auto|scroll/.test(getComputedStyle(e).overflowY)) { el = e; best = d; }
-  }
+  // The grid's scroll box is the tallest scrollable box, but right after the page loads the grid
+  // may not have grown yet and a small side box wins; so look again whenever scrolling stalls.
+  const scroller = () => {
+    let found = null, best = 0;
+    for (const e of document.querySelectorAll('c-wiz,div')) {
+      const d = e.scrollHeight - e.clientHeight;
+      if (d > best && e.clientHeight > 300 && /auto|scroll/.test(getComputedStyle(e).overflowY)) { found = e; best = d; }
+    }
+    return found;
+  };
+  let el = scroller();
   const seen = new Map();
   const grab = () => { for (const e of document.querySelectorAll(sel)) { const h = e.getAttribute('href') || ''; if (!seen.has(h)) seen.set(h, e.getAttribute('aria-label')); } };
-  for (let i = 0, still = 0; i < 20000 && seen.size < MAX_ITEMS && still < 15; i++) {
+  for (let i = 0, still = 0; i < 20000 && seen.size < MAX_ITEMS && still < 40; i++) {
     grab();
     const before = el ? el.scrollTop : 0;
     if (el) el.scrollTop += el.clientHeight * 0.9;
-    await S(300);
+    await S(still > 3 ? 800 : 300);
     still = (!el || el.scrollTop === before) ? still + 1 : 0;
+    if (still > 0) el = scroller() || el;
   }
   grab();
+  // Google sometimes shows only the first ~50 photos of a search when it is throttling; a read
+  // that did not reach the end of the grid is reported so it is not imported as the whole place.
+  const complete = !!el && el.scrollTop + el.clientHeight >= el.scrollHeight - 5;
   const days = new Map();
   const two = n => String(n).padStart(2, '0');
   for (const label of seen.values()) {
@@ -129,7 +141,7 @@
     days.set(day, d);
   }
   const packed = [...days.entries()].sort().map(([day, d]) => `${day}.${d.first}.${d.last}.${d.n}`).join(' ');
-  const out = { name: NAME, key: sessionStorage.frameatlasKey || '', items: seen.size, days: days.size, packed };
+  const out = { name: NAME, key: sessionStorage.frameatlasKey || '', items: seen.size, days: days.size, complete, packed };
   let art = document.getElementById('frameatlas-out');
   if (!art) { art = document.createElement('article'); art.id = 'frameatlas-out'; document.body.prepend(art); }
   art.textContent = JSON.stringify(out);
