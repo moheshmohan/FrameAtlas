@@ -217,6 +217,15 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
   who may be the same, faces that may belong to someone, Google names that matched more than one person)
   as plain questions with their face images; `supervisor_decide` answers apply or dismiss, logged and
   undoable.
+- **From an idea to an AutoCut project**: `idea_to_autocut` turns an idea's checked edit sequence into
+  AutoCut's edit plan (`autocut.catalogEditPlan`) and, with `filmcraft-cli`, a project with every shot in
+  order on a 9:16 sequence for shorts and reels or 16:9 otherwise (360 sample points become 3-second
+  shots, and 360 originals are imported first so their camera proxies come along). Nothing is downloaded:
+  shots whose originals are not on this Mac are listed so they can be fetched with `catalog_retrieve`.
+- **Footage memory**: `footage_record` (and `idea_to_autocut`, and `footage_import_project` for a finished
+  `.fcproj`) remembers which items went into which video and where it was published. `catalog_search`
+  takes `used: unused` to find footage never used, an item's detail says where it was used, a published
+  idea keeps its links and moves to published, and idea writing prefers shots not used before.
 - **Asking you in the chat**: when a call needs your yes and the client supports MCP elicitation,
   FrameAtlas asks you there directly instead of relying on the agent to ask.
 

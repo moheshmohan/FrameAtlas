@@ -17,7 +17,7 @@ READ_ACTIONS = {"search", "asset", "coverage", "stats", "jobs", "job", "resolve"
                 "picker_sessions", "picker_queued_items", "picker_reselection", "compare_sources",
                 "idea_pad", "idea_pad_moments", "metadata_coverage", "people", "person", "people_status",
                 "faces_unsorted", "people_suggest",
-                "people_review", "people_compare", "places", "places_trips", "activity", "permissions", "tasks", "task", "ui_state", "health", "google_read_plan", "google_read_next", "google_read_script"}
+                "people_review", "people_compare", "places", "places_trips", "activity", "permissions", "tasks", "task", "ui_state", "health", "google_read_plan", "google_read_next", "google_read_script", "supervisor_queue", "footage_videos"}
 
 
 def serve(root=DATA, port=7318):

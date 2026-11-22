@@ -124,6 +124,12 @@ async function loadIdeaPad(){
  }));
  $$('[data-idea-dates]').forEach(b=>b.onclick=safe(async()=>{const [s,e]=b.dataset.ideaDates.split('|');resetLibraryFilters();$('#since').value=s;$('#until').value=e;$('#date-row').classList.remove('hidden');navigate('library');offset=0;await search()}));
 }
+// ---- where an item was used: the finished videos recorded with footage_record
+function usedLine(list){
+ if(!list||!list.length)return'';
+ const link=v=>{const p=(v.published||[]).find(x=>x.url);return p?`<a href="${esc(p.url)}" target="_blank" rel="noopener noreferrer">${esc(v.title)} ↗</a>`:esc(v.title)};
+ return `<p class="fine used-line">Used in ${list.map(link).join(', ')}</p>`;
+}
 // ---- trips, days out and return visits read from imported places
 function placesLine(list){
  if(!list||!list.length)return'';

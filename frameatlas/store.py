@@ -293,6 +293,15 @@ class Store:
               asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
               place_id INTEGER NOT NULL REFERENCES places(id) ON DELETE CASCADE, PRIMARY KEY(asset_id, place_id));
             CREATE INDEX IF NOT EXISTS asset_places_place ON asset_places(place_id);
+            CREATE TABLE IF NOT EXISTS videos (
+              id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, project TEXT NOT NULL DEFAULT '',
+              idea_id INTEGER, published TEXT NOT NULL DEFAULT '[]', created REAL NOT NULL, updated REAL NOT NULL);
+            CREATE UNIQUE INDEX IF NOT EXISTS videos_project ON videos(project) WHERE project<>'';
+            CREATE TABLE IF NOT EXISTS footage_use (
+              video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+              asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
+              start REAL, end REAL, PRIMARY KEY(video_id, asset_id, start));
+            CREATE INDEX IF NOT EXISTS footage_use_asset ON footage_use(asset_id);
             CREATE TABLE IF NOT EXISTS idea_pad (
               id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, logline TEXT NOT NULL DEFAULT '',
               notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'idea', format TEXT NOT NULL DEFAULT 'other',
@@ -456,7 +465,7 @@ class Store:
 
     def search(self, query="", provider="", kind="", status="", category="", since="", until="", limit=48, offset=0,
                bounds="", capture_month="", speech_only=False, filename="", scene_only=False, source_access="",
-               speech_state="", person="", place="", *, require_caption=False):
+               speech_state="", person="", place="", used="", *, require_caption=False):
         if speech_only in ("true", "false"):
             speech_only = speech_only == "true"
         if not isinstance(speech_only, bool):
@@ -559,6 +568,10 @@ class Store:
                 raise ValueError("Place must be up to 50 place IDs")
             clauses.append(f"a.id IN (SELECT asset_id FROM asset_places WHERE place_id IN ({','.join('?' * len(ids))}))")
             args.extend(int(i) for i in ids)
+        if used not in ("", None):
+            if used not in ("used", "unused"):
+                raise ValueError("used is used or unused")
+            clauses.append(("" if used == "used" else "NOT ") + "EXISTS(SELECT 1 FROM footage_use u WHERE u.asset_id=a.id)")
         if bounds != "":
             from .geography import inside_bounds, search_bounds
             location_clause, location_args = inside_bounds(search_bounds(bounds))

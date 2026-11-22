@@ -48,7 +48,8 @@ def whole(value):
 AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", "confirmation_decide", "tasks", "task", "wait",
                  "ui_show", "ui_select", "ui_state", "ui_report", "ui_poll", "health", "google_read_plan",
                  "google_read_register", "google_read_next", "google_read_script", "google_read_result", "google_read_reset",
-                 "supervisor_queue", "supervisor_decide"}
+                 "supervisor_queue", "supervisor_decide", "footage_record", "footage_videos", "footage_forget",
+                 "idea_to_autocut", "footage_import_project"}
 
 
 class Service:
@@ -106,6 +107,20 @@ class Service:
             return supervisor.queue(self.store, args.get("kind", ""), whole(args.get("limit", 10)), whole(args.get("offset", 0)))
         if action == "supervisor_decide":
             return supervisor.decide(self.store, args.get("id"), args.get("decision"))
+        from . import footage
+        if action == "footage_record":
+            return footage.record(self.store, args.get("title"), args.get("shots"), args.get("project", ""),
+                                  args.get("idea_id"), args.get("published"))
+        if action == "footage_videos":
+            return footage.videos(self.store, whole(args.get("limit", 50)), whole(args.get("offset", 0)))
+        if action == "footage_forget":
+            return footage.forget_video(self.store, whole(args.get("id")))
+        from . import autocut_handoff
+        if action == "idea_to_autocut":
+            return autocut_handoff.handoff(self.store, whole(args.get("id")), args.get("folder"), args.get("aspect", ""),
+                                           args.get("paths"), args.get("build", True) is not False, args.get("name", ""))
+        if action == "footage_import_project":
+            return autocut_handoff.import_project(self.store, args.get("project"), args.get("title", ""), args.get("idea_id"))
         raise ValueError("Unknown action")
 
     def dispatch(self, action, args):
@@ -114,7 +129,7 @@ class Service:
         if action in AGENT_ACTIONS:
             return self.agent_action(action, args)
         if action == "search":
-            allowed = {"query", "provider", "kind", "status", "category", "since", "until", "limit", "offset", "bounds", "capture_month", "speech_only", "scene_only", "filename", "source_access", "speech_state", "person", "place"}
+            allowed = {"query", "provider", "kind", "status", "category", "since", "until", "limit", "offset", "bounds", "capture_month", "speech_only", "scene_only", "filename", "source_access", "speech_state", "person", "place", "used"}
             return self.store.search(**{k: v for k, v in args.items() if k in allowed})
         if action == "search_related":
             filters = {k: args[k] for k in ("provider", "kind", "status", "category", "since", "until", "bounds", "capture_month", "speech_only", "scene_only", "source_access", "speech_state")
@@ -129,6 +144,8 @@ class Service:
                     asset["scenes"], args.get("start"), args.get("end"), args.get("sample_time"),
                     args.get("scene_key", ""), args.get("part_filename", ""))
             asset["facts"] = capture_info.facts(asset)
+            from .footage import used_in
+            asset["used_in"] = used_in(self.store, asset["id"])
             asset["people"] = people.asset_people(self.store, asset["id"])
             with self.store.connect() as db:
                 asset["places"] = [dict(r) for r in db.execute("""SELECT p.id, p.name, p.address, p.latitude, p.longitude

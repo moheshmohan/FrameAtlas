@@ -162,6 +162,17 @@ class IdeaPadTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 idea_pad.moments(self.store, **bad)
 
+    def test_footage_already_in_a_finished_video_is_marked_for_the_writer(self):
+        trip = self.add_day("2024-05-25", 8, "trip-", summary="A beach at sunset")
+        self.service.dispatch("footage_record", {"title": "Beach reel", "shots": [{"asset_id": trip[0]}]})
+        reply = handle(self.service, {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "idea_pad_generate", "arguments": {"count": 1, "writer": "agent"}}})["result"]["structuredContent"]
+        asked = reply["needs_writing"]
+        samples = json.loads(asked["user"])["moments"][0]["samples"]
+        marked = {s["asset_id"] for s in samples if s.get("used_before")}
+        self.assertEqual(marked, {trip[0]} & {s["asset_id"] for s in samples})
+        self.assertIn("used_before", asked["system"])
+
     def test_generation_keeps_only_valid_moments_and_shots_and_skips_used_moments(self):
         trip = self.add_day("2024-05-25", 8, "trip-", summary="A beach at sunset")
         self.add_day("2025-10-11", 1, "s-", kind="video", summary="A panoramic airport", is_360=True)

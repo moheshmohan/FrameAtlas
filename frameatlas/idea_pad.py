@@ -448,8 +448,13 @@ def generate(store, model="", count=5, since="", until="", focus="", include_use
         raise ValueError("No new moments with analysed footage in this period. Analyse more media, widen the dates, or include moments already used.")
     evidence = [{k: m[k] for k in ("id", "kind", "start", "end", "days", "weekday", "counts", "devices", "places", "people",
                                     "categories", "tags", "anniversary", "samples", "trip") if k in m} for m in chosen]
+    with store.connect() as db:
+        sample_ids = [s["asset_id"] for m in evidence for s in m["samples"]]
+        used_ids = {r[0] for r in db.execute(
+            f"SELECT DISTINCT asset_id FROM footage_use WHERE asset_id IN ({','.join('?' * len(sample_ids))})", sample_ids)} if sample_ids else set()
     for m in evidence:
-        m["samples"] = [{k: s[k] for k in ("asset_id", "kind", "summary")} for s in m["samples"]]
+        m["samples"] = [{**{k: s[k] for k in ("asset_id", "kind", "summary")}, **({"used_before": True} if s["asset_id"] in used_ids else {})}
+                        for s in m["samples"]]
         m["has_360_footage"] = bool(m["counts"]["360"])
     asset_ids = sorted({s["asset_id"] for m in evidence for s in m["samples"]})
     idea_schema = {"type": "object", "additionalProperties": False,
@@ -481,6 +486,9 @@ def generate(store, model="", count=5, since="", until="", focus="", include_use
               "'years ago' looks back. Avoid repeating the existing titles.")
     if focus:
         system += f" Every idea should fit the owner's focus: {json.dumps(focus, ensure_ascii=False)}."
+    if used_ids:
+        system += (" Samples marked used_before already appear in a finished video: prefer fresh shots, and use them "
+                   "only when nothing else shows the moment.")
     request = {"focus": focus or None, "existing_titles": titles, "moments": evidence}
     payload = {"model": model, "stream": False, "format": schema, "keep_alive": 0, "think": False,
                "messages": [{"role": "system", "content": system},
