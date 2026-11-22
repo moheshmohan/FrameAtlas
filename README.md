@@ -226,6 +226,12 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
   `.fcproj`) remembers which items went into which video and where it was published. `catalog_search`
   takes `used: unused` to find footage never used, an item's detail says where it was used, a published
   idea keeps its links and moves to published, and idea writing prefers shots not used before.
+- **Search by meaning**: `semantic_build` turns every stored preview into a SigLIP 2 vector on the GPU,
+  through FilmCraft's `media.embed`, kept in one file in the data folder. Then **Search by meaning** in
+  the Library, or `catalog_search_meaning`, finds the previews that look most like the words, even
+  when no caption uses them, narrowed by the usual filters. It compares pictures, not speech or names.
+  It needs a FilmCraft build with `media.embed` and `media.nearest`, and the already-installed
+  `siglip2-base-224` model; nothing is downloaded.
 - **Best shots**: `catalog_best_shots` ranks the scenes of a trip, a day, a person, a place or any search
   by the picture quality measured during analysis (sharp, well exposed, steady), spread over items and
   days, and story writing sees each scene's quality so it prefers the better take.

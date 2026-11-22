@@ -51,7 +51,7 @@ AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", 
                  "supervisor_queue", "supervisor_decide", "footage_record", "footage_videos", "footage_forget",
                  "idea_to_autocut", "footage_import_project", "places_tidy", "person_details", "person_timeline",
                  "calendar", "calendar_set", "connections", "connections_enable", "connections_token",
-                 "connections_revoke", "best_shots"}
+                 "connections_revoke", "best_shots", "semantic_status", "semantic_build", "semantic_reset", "search_meaning"}
 
 
 class Service:
@@ -134,6 +134,17 @@ class Service:
             return family.occasions(self.store)
         if action == "calendar_set":
             return family.set_occasions(self.store, args.get("occasions"))
+        if action in ("semantic_status", "semantic_build", "semantic_reset", "search_meaning"):
+            from . import semantic
+            if action == "semantic_status":
+                return semantic.status(self.store)
+            if action == "semantic_build":
+                return semantic.build(self.store, whole(args.get("limit", 5000)))
+            if action == "semantic_reset":
+                return semantic.reset(self.store)
+            keep = {k: args[k] for k in ("provider", "kind", "status", "category", "since", "until", "person", "place", "used",
+                                         "capture_month", "bounds") if args.get(k) not in (None, "")}
+            return semantic.search(self.store, args.get("query", ""), whole(args.get("limit", 48)), **keep)
         if action == "best_shots":
             from . import best_shots
             keep = {k: args[k] for k in best_shots.FILTERS if k in args}

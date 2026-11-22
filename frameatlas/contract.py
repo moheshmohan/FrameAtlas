@@ -14,7 +14,8 @@ TIERS = {
         "people_list", "person_get", "faces_unsorted", "people_suggest", "people_review", "people_compare",
         "places_list", "places_trips", "agent_activity", "agent_permissions", "catalog_tasks", "catalog_task",
         "catalog_wait", "ui_state", "catalog_health", "google_read_plan", "google_read_next", "google_read_script",
-        "supervisor_queue", "footage_videos", "person_timeline", "calendar", "catalog_best_shots"},
+        "supervisor_queue", "footage_videos", "person_timeline", "calendar", "catalog_best_shots",
+        "semantic_status", "catalog_search_meaning"},
     "write": {
         "catalog_storage_limit", "catalog_retry_speech", "catalog_confirm_studio_download",
         "catalog_cleanup_studio_download", "catalog_cancel", "catalog_queue_control", "catalog_ideas",
@@ -26,10 +27,10 @@ TIERS = {
         "people_review_decide", "people_import_names", "places_import", "agent_undo", "ui_show", "ui_select", "google_read_register",
         "google_read_result", "google_read_reset", "supervisor_decide",
         "footage_record", "idea_to_autocut", "footage_import_project", "places_tidy", "person_details",
-        "calendar_set"},
+        "calendar_set", "semantic_build"},
     "destructive": {
         "idea_pad_delete", "person_merge", "people_forget", "places_forget", "catalog_merge", "catalog_picker_close",
-        "footage_forget"},
+        "footage_forget", "semantic_reset"},
     "outside": {
         "catalog_analyze", "catalog_retrieve", "catalog_stage_studio_batch", "catalog_picker_create",
         "catalog_picker_import"},
@@ -44,7 +45,7 @@ IDEMPOTENT = TIERS["read"] | {
     "person_update", "faces_link", "faces_unlink", "face_assign", "places_import", "people_forget",
     "places_forget", "idea_pad_delete", "catalog_picker_close", "catalog_import_native"}
 # Tools that can take a while: background: true returns a task to wait on with catalog_wait.
-LONG = {"idea_to_autocut", "footage_import_project", "catalog_ideas", "idea_pad_generate", "idea_pad_develop", "places_import", "people_import_names",
+LONG = {"semantic_build", "idea_to_autocut", "footage_import_project", "catalog_ideas", "idea_pad_generate", "idea_pad_develop", "places_import", "people_import_names",
         "catalog_metadata_backfill", "catalog_import_takeout", "catalog_import_native", "catalog_import_manifest"}
 # Service actions only the owner reaches, through the browser UI: an agent cannot widen its own
 # permissions or approve its own calls.
@@ -102,6 +103,10 @@ OUTPUT_REQUIRED = {
     "calendar": ["occasions"],
     "calendar_set": ["occasions"],
     "catalog_best_shots": ["shots", "items_considered", "scored_scenes"],
+    "semantic_status": ["embedded", "previews", "left", "consistent"],
+    "semantic_build": ["added", "failed", "embedded"],
+    "semantic_reset": ["embedded"],
+    "catalog_search_meaning": ["items", "total"],
     "idea_pad_list": ["items", "total"],
     "idea_pad_moments": ["moments"],
     "people_status": ["faces", "people", "named", "running"],

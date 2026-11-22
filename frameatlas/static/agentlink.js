@@ -80,7 +80,22 @@ async function agentReport(){
 }
 
 function setupAgentLink(){
+  $('#search-meaning').onclick=safe(searchMeaning);
   window.addEventListener('hashchange',()=>routeHash(location.hash).catch(e=>toast(e.message,true)));
   setInterval(agentReport,2000);
   agentPoll();
+}
+
+// Search by meaning: previews that look like the words (SigLIP 2 vectors, semantic.py), with the Library's filters.
+async function searchMeaning(){
+  const {limit,offset:_o,query,filename,speech_only,scene_only,...rest}=filters();
+  if(!query.trim()){toast('Type what you are looking for first',true);return}
+  const criteria=Object.fromEntries(Object.entries(rest).filter(([,v])=>v!==''&&v!==false&&v!=null));
+  const button=$('#search-meaning');button.disabled=true;button.textContent='Looking at the previews…';$('#media-grid').classList.add('loading');
+  try{
+    const r=await api('search_meaning',{query,limit:48,...criteria},true);
+    results=r.items;total=results.length;relatedResults=true;renderCards();
+    $('#result-count').textContent=fmt(total)+' items';$('#results-title').textContent='Looks like “'+query+'”';
+    $('#prev').disabled=true;$('#next').disabled=true;$('#page-info').textContent=`Best ${fmt(total)} of ${fmt(r.searched||0)} previews`;
+  }finally{button.disabled=false;button.textContent='Search by meaning';$('#media-grid').classList.remove('loading')}
 }
