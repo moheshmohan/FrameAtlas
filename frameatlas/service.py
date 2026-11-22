@@ -45,7 +45,8 @@ def whole(value):
     return value
 
 
-AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", "confirmation_decide", "tasks", "task", "wait"}
+AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", "confirmation_decide", "tasks", "task", "wait",
+                 "ui_show", "ui_select", "ui_state", "ui_report", "ui_poll"}
 
 
 class Service:
@@ -72,6 +73,17 @@ class Service:
             return agents.task(self.store, whole(args.get("id")))
         if action == "wait":
             return agents.wait(self, task_id=args.get("task"), job_id=args.get("job"), timeout=args.get("timeout", 30))
+        from . import ui_channel
+        if action == "ui_show":
+            return ui_channel.show(self.store, args)
+        if action == "ui_select":
+            return ui_channel.select(self.store, args)
+        if action == "ui_state":
+            return ui_channel.state(self.store)
+        if action == "ui_report":  # the open page only
+            return ui_channel.report(self.store, args.get("state"))
+        if action == "ui_poll":  # the open page only
+            return ui_channel.poll(self.store, whole(args.get("after", -1)), args.get("wait", ui_channel.POLL_SECONDS))
         raise ValueError("Unknown action")
 
     def dispatch(self, action, args):

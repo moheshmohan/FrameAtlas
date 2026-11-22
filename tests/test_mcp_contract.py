@@ -14,7 +14,7 @@ from frameatlas.store import Store
 
 ROOT = Path(__file__).resolve().parent.parent / "frameatlas"
 # Reachable over HTTP only, by design: the browser page's own session token.
-HTTP_ONLY = {"session"}
+HTTP_ONLY = contract.PAGE_ONLY
 # Read tools that start a local model or the native FilmCraft CLI, so they are not run here.
 NOT_RUN = {"catalog_search_related": "asks a local writing model",
            "catalog_studio_ocr": "runs local OCR on a screenshot",
@@ -90,7 +90,7 @@ class ContractTests(unittest.TestCase):
         self.assertGreater(len(actions), 50)
         self.assertGreater(len(calls), 40)
         tools = {t[2] for t in TOOLS if t[2]}
-        self.assertEqual(sorted(actions - tools - contract.OWNER_ONLY), [], "service actions without an MCP tool")
+        self.assertEqual(sorted(actions - tools - contract.OWNER_ONLY - contract.PAGE_ONLY), [], "service actions without an MCP tool")
         self.assertEqual(sorted(calls - tools - HTTP_ONLY - contract.OWNER_ONLY), [], "page actions without an MCP tool")
         self.assertEqual(tools & contract.OWNER_ONLY, set(), "owner-only actions must not be tools")
 

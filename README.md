@@ -186,6 +186,16 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
   Face scans, regroups and sorts return one too. `catalog_wait` blocks up to 60 seconds until a task
   finishes or an analysis job changes state (with MCP progress notifications when the call carries a
   `progressToken`); `catalog_tasks` and `catalog_task` list and read them.
+- **A shared screen**: `ui_show` opens something in the FrameAtlas page you have open (a search, an
+  item at a time, a person, a place, a trip's days, an idea or any page) with a short message;
+  `ui_select` selects media in the Library; `ui_state` reads what you are looking at: the page,
+  the search and filters, the results on screen, your selection and the open item. With no page
+  open, `ui_show` returns a link instead. The same links work by hand: `#item/<id>@12.5`,
+  `#person/3`, `#place/4`, `#idea/7`, `#library?query=kites&since=2024-05-25`.
+- **Resources and prompts**: MCP resources for the catalogue's coverage, named people, ideas, trips,
+  places and agent activity, plus templates for one item (`frameatlas://asset/{id}`), its preview
+  image, a person, a place or an idea. Prompts: `find_footage`, `sort_people`, `plan_trip_video` and
+  `check_coverage`.
 
 ### Ideas (the Idea Pad)
 

@@ -94,6 +94,9 @@ TOOLS = [
     ("catalog_wait", "Wait up to timeout seconds (default 30, at most 60) for a background task to finish (task) or an analysis job to change state (job, from catalog_analyze or catalog_jobs), then return it. finished_waiting says whether it got there; if not, call again. Sends progress notifications when the call has a progressToken.", "wait", {"task": {"type": "integer", "minimum": 1}, "job": {"type": "integer", "minimum": 1}, "timeout": {"type": "number", "minimum": 1, "maximum": 60}}),
     ("agent_activity", "Read what agents did: each logged call with when, which client, tool, risk tier, result or error code, and whether it can be undone. Also the owner's permissions and the calls waiting for the owner's approval. Reads are left out unless include_reads.", "activity", {"include_reads": {"type": "boolean"}, "tool": STRING, "client": STRING, "limit": {"type": "integer", "minimum": 1, "maximum": 500}, "offset": {"type": "integer", "minimum": 0}}),
     ("agent_permissions", "Read the owner's permissions for agents: for write, destructive and outside tools, allow, confirm (repeat the call with the token it returns, after telling the owner), owner (the owner approves it on the Activity page) or deny. Only the owner can change them, in the browser UI.", "permissions", {}),
+    ("ui_show", "Show the owner something in the open FrameAtlas page: view library (with query, person, place, since, until, kind, provider), item (id, optional time in seconds to open at that scene), person (id), place (id, or several comma-separated), trip (since and until), idea (id), or the people, ideas, queue, sources or activity page. message is shown with it. Returns a link the owner can open when no page is open (shown false).", "ui_show", {"view": {"type": "string", "enum": ["library", "item", "person", "place", "trip", "idea", "people", "ideas", "queue", "sources", "activity"]}, "id": {"type": "string", "maxLength": 200}, "time": {"type": "number", "minimum": 0}, "query": STRING, "person": STRING, "place": STRING, "since": STRING, "until": STRING, "kind": {"type": "string", "enum": ["", "photo", "video", "audio"]}, "provider": STRING, "message": {"type": "string", "maxLength": 200}}),
+    ("ui_select", "Select media in the open page's Library, so the owner can act on them (analyse, build a story) or check them: replace the selection, add to it, or clear it. Up to 200 catalogue IDs.", "ui_select", {"ids": {"type": "array", "items": STRING, "maxItems": 200, "uniqueItems": True}, "mode": {"type": "string", "enum": ["replace", "add", "clear"]}, "message": {"type": "string", "maxLength": 200}}),
+    ("ui_state", "Read what the owner is looking at in the open FrameAtlas page: the page, the Library's query and filters, the results on screen, the media they selected (IDs and filenames), and the open item or person. page_open is false when no page is open.", "ui_state", {}),
     ("agent_undo", "Undo a logged change by its agent_activity id when can_undo is true: idea added, changed or deleted, person renamed, hidden or noted, summary or tags corrected, queue paused, storage limit, or an applied sorting proposal.", "activity_undo", {"id": {"type": "integer", "minimum": 1}}),
 ]
 VERSION = "0.2.0"
@@ -192,6 +195,117 @@ def run_batch(service, args):
     return {"results": results, "ran": len(results), "stopped": len(results) < len(args["calls"])}
 
 
+RESOURCES = [
+    ("frameatlas://stats", "Catalogue coverage", "What is in the catalogue: sources, media kinds, analysis coverage and storage.", "stats", {}),
+    ("frameatlas://people", "Named people", "The people the owner has named, with how often they appear.", "people", {"named_only": True, "limit": 500}),
+    ("frameatlas://ideas", "Idea Pad", "Saved video ideas with status, format and edit sequences.", "idea_pad", {"limit": 200}),
+    ("frameatlas://trips", "Trips and days out", "Trips away from home, days out and return visits from imported places.", "places_trips", {"limit": 300}),
+    ("frameatlas://places", "Places", "Imported places with positions, days and item counts.", "places", {"limit": 2000}),
+    ("frameatlas://activity", "Agent activity", "What agents did recently, the calls waiting for the owner, and the owner's permissions.", "activity", {"limit": 50}),
+]
+TEMPLATES = [
+    ("frameatlas://asset/{id}", "Media item", "One catalogue item with its scenes, transcript, people and places.", "application/json"),
+    ("frameatlas://preview/{id}", "Preview image", "The stored small JPEG preview of a catalogue item.", "image/jpeg"),
+    ("frameatlas://person/{id}", "Person", "One person and their clearest faces.", "application/json"),
+    ("frameatlas://place/{id}", "Place", "One imported place with its address, position and days.", "application/json"),
+    ("frameatlas://idea/{id}", "Idea", "One Idea Pad entry with its edit sequence.", "application/json"),
+]
+PROMPTS = {
+    "find_footage": ("Find footage for a video idea and show it in FrameAtlas.",
+                     [("description", "What the video is about or what shots are needed", True),
+                      ("since", "Earliest date, YYYY-MM-DD", False), ("until", "Latest date, YYYY-MM-DD", False)],
+                     "Find footage in FrameAtlas for: {description}.{dates} Search with catalog_search (and "
+                     "catalog_search_related when the words in captions may differ). If people or places are mentioned, "
+                     "look them up with people_list and places_list and search with person or place. Open the best matches "
+                     "with catalog_asset to check the scenes really show it. Then show them to me with ui_show (the library "
+                     "with your query, or an item at the right time) and list each shot: filename, time range, and why it fits."),
+    "sort_people": ("Sort the faces FrameAtlas found into the right people, with the owner's yes for unclear cases.", [],
+                    "Help me sort the people in FrameAtlas. Read people_status. Run people_autosort without apply and wait "
+                    "for its task with catalog_wait. Then read people_review: for each proposal look at the faces with "
+                    "people_compare and decide with people_review_decide (apply only when the faces clearly match; dismiss "
+                    "otherwise). Ask me about anything you are unsure of, and show me the person with ui_show first."),
+    "plan_trip_video": ("Plan a video about one trip or day out from its places, people and footage.",
+                        [("since", "First day of the trip, YYYY-MM-DD", True), ("until", "Last day, YYYY-MM-DD", True),
+                         ("format", "short, vlog, montage, documentary or other", False)],
+                        "Plan a {format} video about the trip from {since} to {until}. Read places_trips and "
+                        "idea_pad_moments for those dates, and catalog_search for the footage (since/until). Note who is in "
+                        "it (person filter, people_list) and where. Save the idea with idea_pad_add (linking the best items), "
+                        "build its edit sequence with idea_pad_develop (background: true, then catalog_wait), and show me "
+                        "the idea with ui_show. Tell me which shots are missing."),
+    "check_coverage": ("Report what FrameAtlas knows and what is missing or waiting.", [],
+                       "Tell me how complete FrameAtlas is. Read catalog_stats, catalog_coverage, catalog_metadata_coverage, "
+                       "catalog_jobs and people_status. Say what is analysed, what is only listed, what failed and why, "
+                       "which Google selections expire soon, and the three most useful next steps."),
+}
+
+
+def read_resource(service, uri):
+    import base64
+    import re as _re
+    from . import idea_pad as _ideas
+    for fixed, _name, _desc, action, args in RESOURCES:
+        if uri == fixed:
+            return [{"uri": uri, "mimeType": "application/json", "text": json.dumps(service.dispatch(action, dict(args)), ensure_ascii=False, default=str)}]
+    m = _re.fullmatch(r"frameatlas://(asset|preview|person|place|idea)/([A-Za-z0-9_-]{1,64})", str(uri))
+    if not m:
+        raise contract.ToolError("not_found", "Unknown resource")
+    kind, ident = m.groups()
+    if kind == "asset":
+        data = service.dispatch("asset", {"id": ident})
+    elif kind == "preview":
+        asset = service.store.get(ident, include_scenes=False)
+        name = asset.get("thumbnail") or ""
+        path = service.store.root / "thumbnails" / name
+        if not _re.fullmatch(r"[a-f0-9]{24}\.jpg", name) or path.is_symlink() or not path.is_file() or path.stat().st_size > 2 * 1024 ** 2:
+            raise contract.ToolError("not_found", "This item has no stored preview")
+        return [{"uri": uri, "mimeType": "image/jpeg", "blob": base64.b64encode(path.read_bytes()).decode()}]
+    elif kind == "person":
+        data = service.dispatch("person", {"id": int(ident) if ident.isdigit() else -1, "limit": 24})
+    elif kind == "place":
+        if not ident.isdigit():
+            raise contract.ToolError("not_found", "Place not found")
+        with service.store.connect() as db:
+            row = db.execute("SELECT id, source, key, name, address, country, latitude, longitude FROM places WHERE id=?", (int(ident),)).fetchone()
+            if not row:
+                raise contract.ToolError("not_found", "Place not found")
+            data = dict(row)
+            data["days"] = [dict(r) for r in db.execute("SELECT day, items, first, last FROM place_days WHERE place_id=? ORDER BY day", (row["id"],))]
+    else:
+        with service.store.connect() as db:
+            _ideas.ensure(db)
+            row = db.execute("SELECT * FROM idea_pad WHERE id=?", (int(ident) if ident.isdigit() else -1,)).fetchone()
+        if not row:
+            raise contract.ToolError("not_found", "Idea not found")
+        data = _ideas._row(row)
+    return [{"uri": uri, "mimeType": "application/json", "text": json.dumps(data, ensure_ascii=False, default=str)}]
+
+
+def get_prompt(name, arguments):
+    if name not in PROMPTS:
+        raise contract.ToolError("not_found", "Unknown prompt")
+    description, params, text = PROMPTS[name]
+    arguments = arguments if isinstance(arguments, dict) else {}
+    values = {}
+    for pname, _desc, required in params:
+        value = arguments.get(pname, "")
+        if not isinstance(value, str) or len(value) > 2000:
+            raise contract.ToolError("invalid_arguments", f"{pname} must be text of up to 2000 characters")
+        if required and not value.strip():
+            raise contract.ToolError("invalid_arguments", f"{pname} is required")
+        values[pname] = value.strip()
+    if name == "find_footage":
+        dates = " ".join(x for x in (f"From {values['since']}." if values.get("since") else "",
+                                     f"Until {values['until']}." if values.get("until") else "") if x)
+        values["dates"] = (" " + dates) if dates else ""
+    if name == "plan_trip_video":
+        values["format"] = values.get("format") or "short"
+    return {"description": description, "messages": [{"role": "user", "content": {"type": "text", "text": text.format(**values)}}]}
+
+
+def rpc_error(rid, code, message):
+    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
+
+
 def handle(service, message, send=None):
     """Answer one JSON-RPC message. send, when given, writes notifications (progress) to the client."""
     rid = message.get("id")
@@ -202,9 +316,32 @@ def handle(service, message, send=None):
         info = (message.get("params") or {}).get("clientInfo") if isinstance(message.get("params"), dict) else None
         if isinstance(info, dict) and isinstance(info.get("name"), str) and info["name"].strip():
             SESSION["client"] = "mcp:" + info["name"].strip()[:60]
-        return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}}, "serverInfo": {"name": "frameatlas", "title": "FrameAtlas", "version": VERSION}, "instructions": INSTRUCTIONS}}
+        return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}, "prompts": {"listChanged": False}}, "serverInfo": {"name": "frameatlas", "title": "FrameAtlas", "version": VERSION}, "instructions": INSTRUCTIONS}}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
+    if method == "resources/list":
+        return {"jsonrpc": "2.0", "id": rid, "result": {"resources": [
+            {"uri": u, "name": n, "description": d, "mimeType": "application/json"} for u, n, d, _a, _x in RESOURCES]}}
+    if method == "resources/templates/list":
+        return {"jsonrpc": "2.0", "id": rid, "result": {"resourceTemplates": [
+            {"uriTemplate": u, "name": n, "description": d, "mimeType": m} for u, n, d, m in TEMPLATES]}}
+    if method == "resources/read":
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        try:
+            return {"jsonrpc": "2.0", "id": rid, "result": {"contents": read_resource(service, params.get("uri"))}}
+        except Exception as exc:
+            error = contract.classify(exc)
+            return rpc_error(rid, -32002 if error["code"] == "not_found" else -32603, error["message"])
+    if method == "prompts/list":
+        return {"jsonrpc": "2.0", "id": rid, "result": {"prompts": [
+            {"name": n, "description": d, "arguments": [{"name": a, "description": ad, "required": r} for a, ad, r in params]}
+            for n, (d, params, _t) in PROMPTS.items()]}}
+    if method == "prompts/get":
+        params = message.get("params") if isinstance(message.get("params"), dict) else {}
+        try:
+            return {"jsonrpc": "2.0", "id": rid, "result": get_prompt(params.get("name"), params.get("arguments"))}
+        except Exception as exc:
+            return rpc_error(rid, -32602, contract.classify(exc)["message"])
     if method == "tools/list":
         return {"jsonrpc": "2.0", "id": rid, "result": {"tools": [tool_definition(*t) for t in TOOLS]}}
     if method == "tools/call":

@@ -447,7 +447,7 @@ async function init(){csrf=(await (await fetch('/api/session')).json()).csrf;$$(
  $('#gps-toggle').onclick=()=>{const visible=!$('#gps-filter').classList.toggle('hidden');$('#gps-toggle').setAttribute('aria-expanded',String(visible))};
  $('#gps-filter').onsubmit=safe(async e=>{e.preventDefault();const previous=bounds;bounds=$('#gps-bounds').value.trim();offset=0;try{await search()}catch(err){bounds=previous;throw err}});
  $('#gps-clear').onclick=safe(async()=>{$('#gps-bounds').value='';bounds='';offset=0;await search()});
- setupAnalysis();setupStudioInventory();setupIdeaPad();setupPeople();setupActivity();await Promise.all([loadStats(),search(),loadJobs()]);const initial=location.hash.slice(1);if(['library','people','ideapad','ideas','queue','sources','activity'].includes(initial))navigate(initial);
+ setupAnalysis();setupStudioInventory();setupIdeaPad();setupPeople();setupActivity();setupAgentLink();await Promise.all([loadStats(),search(),loadJobs()]);const initial=location.hash.slice(1);if(['library','people','ideapad','ideas','queue','sources','activity'].includes(initial))navigate(initial);else if(/[\/?]/.test(initial))routeHash(location.hash).catch(e=>toast(e.message,true));
  setInterval(async()=>{try{await loadJobs();await loadStats();if(page==='library'&&stats.statuses.ready!==undefined&&!$('#detail').open&&!relatedResults&&!relatedPending)await search()}catch{}},10000);
 }
 async function showRetrievalForm(reference={}){
