@@ -116,9 +116,10 @@ TOOLS = [
     ("person_timeline", "A person's years in the media: items and videos each year (with their age when born is known), a few analysed examples, and who they appear with most. Use catalog_search with person set to two ids for items with both.", "person_timeline", {"id": {"type": "integer", "minimum": 1}}),
     ("calendar", "Read the owner's occasions (festivals, holidays and anniversaries) that become moments for video ideas, alongside named people's birthdays.", "calendar", {}),
     ("calendar_set", "Replace the owner's occasions: each {name, month, day} for a fixed date every year, or {name, dates: [YYYY-MM-DD...]} for a festival whose date moves (Onam, Vishu, Eid, Diwali), listed year by year. Only add dates you are sure of or the owner gave.", "calendar_set", {"occasions": {"type": "array", "maxItems": 200, "items": {"type": "object"}}}),
+    ("catalog_best_shots", "The best-looking shots for a trip or day (since, until), a person, a place, a search (query) or any catalog_search filter, from the picture quality measured for every analysed scene: sharpness, exposure and steadiness in one score (0–1). Spread out: at most per_item shots from one item (default 2) and per_day from one day (default 6). Each shot has its item, scene time range, caption and scores; set used to unused for fresh footage. Scores say how good the picture is, not what it shows.", "best_shots", {**{k: STRING for k in ("query", "provider", "kind", "since", "until", "person", "place", "category", "bounds", "capture_month")}, "used": {"type": "string", "enum": ["", "used", "unused"]}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}, "per_item": {"type": "integer", "minimum": 1, "maximum": 10}, "per_day": {"type": "integer", "minimum": 1, "maximum": 50}, "min_score": {"type": "number", "minimum": 0, "maximum": 1}}),
     ("agent_undo", "Undo a logged change by its agent_activity id when can_undo is true: idea added, changed or deleted, person renamed, hidden or noted, summary or tags corrected, queue paused, storage limit, or an applied sorting proposal.", "activity_undo", {"id": {"type": "integer", "minimum": 1}}),
 ]
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 INSTRUCTIONS = (
     "FrameAtlas is a local catalogue of the owner's photos and videos (scene descriptions, transcripts, people, "
     "places, trips, video ideas). All media inference is local. Each tool's annotations give its risk: readOnlyHint "
@@ -252,7 +253,7 @@ def ask_owner(store, error, send, receive):
     return token
 
 
-def call_tool(service, name, args, depth=0, notify=None, send=None, receive=None):
+def call_tool(service, name, args, depth=0, notify=None, send=None, receive=None, session=None):
     """Run one tool by name: check its arguments, apply the owner's permissions, run it (or start it in
     the background), and log it. Returns the result object or raises."""
     from . import agents, writer
@@ -262,13 +263,19 @@ def call_tool(service, name, args, depth=0, notify=None, send=None, receive=None
     problems = contract.check({"type": "object", "properties": tool_properties(name, tool[3]), "additionalProperties": False}, args)
     if problems:
         raise contract.ToolError("invalid_arguments", "Invalid arguments: " + "; ".join(problems))
+    session = SESSION if session is None else session
+    scope = session.get("scope", "all")
+    tier = contract.TIER_OF.get(name, "destructive")
+    if scope == "read" and tier != "read" or scope == "write" and tier not in ("read", "write"):
+        raise contract.ToolError("forbidden", f"This connection may only use {'read' if scope == 'read' else 'read and write'} tools",
+                                 "Ask the owner for a token with a wider scope on FrameAtlas's Activity page.")
     if name == "catalog_batch":
         if depth:
             raise contract.ToolError("invalid_arguments", "catalog_batch cannot run inside catalog_batch")
-        return run_batch(service, args)
+        return run_batch(service, args, session)
     if name == "catalog_wait":
         return agents.wait(service, task_id=args.get("task"), job_id=args.get("job"), timeout=args.get("timeout", 30), notify=notify)
-    client, store = SESSION["client"], service.store
+    client, store = session["client"], service.store
     clean = {k: v for k, v in args.items() if k not in agents.PRIVATE_ARGS and k not in WRITER_ARGS}
     logged_args = {k: v for k, v in args.items() if k not in agents.PRIVATE_ARGS and k != "drafts"}
     mode = args.get("writer", "local")
@@ -277,9 +284,9 @@ def call_tool(service, name, args, depth=0, notify=None, send=None, receive=None
         try:
             agents.gate(store, name, args, client)
         except contract.ToolError as gated:
-            if gated.code == "needs_confirmation" and SESSION.get("elicitation") and receive and not depth:
+            if gated.code == "needs_confirmation" and session.get("elicitation") and receive and not depth:
                 token = ask_owner(store, gated, send, receive)
-                return call_tool(service, name, {**args, "confirmation": token}, depth, notify, send, receive)
+                return call_tool(service, name, {**args, "confirmation": token}, depth, notify, send, receive, session)
             raise
         if mode != "local" and args.get("background"):
             raise contract.ToolError("invalid_arguments", "Only the local writer can run in the background")
@@ -290,7 +297,7 @@ def call_tool(service, name, args, depth=0, notify=None, send=None, receive=None
             return result
         sampler = None
         if mode == "client":
-            if not SESSION.get("sampling") or not receive:
+            if not session.get("sampling") or not receive:
                 raise contract.ToolError("invalid_arguments", "This client does not offer MCP sampling; use writer agent instead")
             sampler = make_sampler(send, receive)
         plan = agents.before(store, name, clean)
@@ -317,7 +324,7 @@ def call_tool(service, name, args, depth=0, notify=None, send=None, receive=None
     return result
 
 
-def run_batch(service, args):
+def run_batch(service, args, session=None):
     results, stop = [], args.get("stop_on_error", True)
     for call in args["calls"]:
         name, arguments = call["tool"], call.get("arguments", {})
@@ -325,7 +332,7 @@ def run_batch(service, args):
             if name not in contract.BATCHABLE and any(t[0] == name for t in TOOLS):
                 raise contract.ToolError("invalid_arguments", f"{name} cannot run in a batch; call it on its own",
                                          "Destructive tools and tools that reach Google or Insta360 need their own call.")
-            results.append({"tool": name, "ok": True, "result": call_tool(service, name, arguments, depth=1)})
+            results.append({"tool": name, "ok": True, "result": call_tool(service, name, arguments, depth=1, session=session)})
         except Exception as exc:
             results.append({"tool": name, "ok": False, "error": contract.classify(exc)})
             if stop:
@@ -444,20 +451,21 @@ def rpc_error(rid, code, message):
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
 
 
-def handle(service, message, send=None, receive=None):
+def handle(service, message, send=None, receive=None, session=None):
     """Answer one JSON-RPC message. send, when given, writes notifications (progress) to the client."""
     rid = message.get("id")
     method = message.get("method")
     if rid is None:
         return None
     if method == "initialize":
-        info = (message.get("params") or {}).get("clientInfo") if isinstance(message.get("params"), dict) else None
-        if isinstance(info, dict) and isinstance(info.get("name"), str) and info["name"].strip():
-            SESSION["client"] = "mcp:" + info["name"].strip()[:60]
-        caps = (message.get("params") or {}).get("capabilities") if isinstance(message.get("params"), dict) else None
-        caps = caps if isinstance(caps, dict) else {}
-        SESSION["sampling"] = isinstance(caps.get("sampling"), dict)
-        SESSION["elicitation"] = isinstance(caps.get("elicitation"), dict)
+        if session is None:  # stdio: one client for the life of this process
+            info = (message.get("params") or {}).get("clientInfo") if isinstance(message.get("params"), dict) else None
+            if isinstance(info, dict) and isinstance(info.get("name"), str) and info["name"].strip():
+                SESSION["client"] = "mcp:" + info["name"].strip()[:60]
+            caps = (message.get("params") or {}).get("capabilities") if isinstance(message.get("params"), dict) else None
+            caps = caps if isinstance(caps, dict) else {}
+            SESSION["sampling"] = isinstance(caps.get("sampling"), dict)
+            SESSION["elicitation"] = isinstance(caps.get("elicitation"), dict)
         return {"jsonrpc": "2.0", "id": rid, "result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False, "listChanged": False}, "prompts": {"listChanged": False}}, "serverInfo": {"name": "frameatlas", "title": "FrameAtlas", "version": VERSION}, "instructions": INSTRUCTIONS}}
     if method == "ping":
         return {"jsonrpc": "2.0", "id": rid, "result": {}}
@@ -500,7 +508,7 @@ def handle(service, message, send=None, receive=None):
             if send and isinstance(token, (str, int)) and not isinstance(token, bool):
                 notify = lambda done, total, text: send({"jsonrpc": "2.0", "method": "notifications/progress", "params": {
                     "progressToken": token, "progress": round(done, 1), "total": total, "message": text[:200]}})
-            result = call_tool(service, params.get("name"), args, notify=notify, send=send, receive=receive)
+            result = call_tool(service, params.get("name"), args, notify=notify, send=send, receive=receive, session=session)
             text = json.dumps(result, ensure_ascii=False, default=str)
             content = {"content": [{"type": "text", "text": text}] + face_images(service, result),
                        "structuredContent": json.loads(text), "isError": False}

@@ -230,7 +230,7 @@ class ContractTests(unittest.TestCase):
 
     def test_initialize_names_the_version_and_the_rules(self):
         reply = handle(self.service, {"jsonrpc": "2.0", "id": 1, "method": "initialize"})["result"]
-        self.assertEqual(reply["serverInfo"]["version"], "0.2.0")
+        self.assertEqual(reply["serverInfo"]["version"], "0.3.0")
         self.assertIn("destructiveHint", reply["instructions"])
 
 

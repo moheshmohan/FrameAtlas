@@ -226,6 +226,18 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
   `.fcproj`) remembers which items went into which video and where it was published. `catalog_search`
   takes `used: unused` to find footage never used, an item's detail says where it was used, a published
   idea keeps its links and moves to published, and idea writing prefers shots not used before.
+- **Best shots**: `catalog_best_shots` ranks the scenes of a trip, a day, a person, a place or any search
+  by the picture quality measured during analysis (sharp, well exposed, steady), spread over items and
+  days, and story writing sees each scene's quality so it prefers the better take.
+- **Other AI apps**: Claude Code starts FrameAtlas's MCP server itself. Other apps on this Mac (another
+  agent, a desktop AI app) can connect over MCP's HTTP transport at `http://127.0.0.1:7318/mcp`, once
+  you turn it on under **Activity › Other AI apps on this Mac** and give each app its own token: read
+  only, read and write, or everything (still under your permissions). Tokens are shown once and kept
+  as fingerprints; revoke one at any time. It listens on this Mac only, behind the same host and origin
+  checks as the page, and every call is logged with the app's name.
+- These settings govern what agents can do through FrameAtlas's tools. An agent that can run shell
+  commands on this Mac is not stopped by any app's settings, so give such agents only work you trust
+  them with.
 - **Asking you in the chat**: when a call needs your yes and the client supports MCP elicitation,
   FrameAtlas asks you there directly instead of relying on the agent to ask.
 

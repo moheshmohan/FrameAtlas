@@ -11,6 +11,8 @@ const when=t=>{const d=new Date(t*1000);return d.toLocaleDateString(undefined,{m
 const clientName=c=>c==='mcp'?'Agent':c.startsWith('mcp:')?c.slice(4):c==='owner'?'You':c;
 
 function setupActivity(){
+  $('#connections-on').onchange=safe(async e=>{await api('connections_enable',{enabled:e.target.checked},true);toast(e.target.checked?'Other AI apps can connect with a token':'Connections from other apps are off');await loadConnections()});
+  $('#connections-form').onsubmit=safe(async e=>{e.preventDefault();const r=await api('connections_token',{label:$('#connections-label').value,scope:$('#connections-scope').value},true);$('#connections-label').value='';showNewToken(r);await loadConnections()});
   $('#refresh-health').onclick=safe(loadHealth);
   $('#activity-refresh').onclick=safe(loadActivity);
   $('#activity-reads').onchange=safe(async e=>{activityReads=e.target.checked;activityOffset=0;await loadActivity()});
@@ -20,7 +22,7 @@ function setupActivity(){
 
 async function loadActivity(){
   const r=await api('activity',{include_reads:activityReads,limit:ACTIVITY_PAGE,offset:activityOffset});
-  renderPending(r.pending);renderPermissions(r.permissions);renderLog(r);
+  renderPending(r.pending);renderPermissions(r.permissions);renderLog(r);await loadConnections();
   $('#nav-activity').textContent=r.pending.length||'';
 }
 
@@ -51,4 +53,19 @@ async function loadHealth(){
 function healthLink(i){
   const go={failed_jobs:'queue',queue_paused:'queue',agent_waiting:'activity',people_review:'people',faces_unsorted:'people',not_analysed:'never'}[i.kind];
   return go?`<button class="text-button" data-health-go="${go}"${i.next&&i.next.provider?` data-provider="${esc(i.next.provider)}"`:''}>Open →</button>`:'';
+}
+
+// Other AI apps: MCP over HTTP with a token each (connections.py); the owner manages them here.
+const SCOPE_LABELS={read:'Read only',write:'Read and write',all:'Everything'};
+async function loadConnections(){
+  const r=await api('connections',{},true);
+  $('#connections-on').checked=r.enabled;$('#connections-url').textContent=r.url;
+  $('#connections-tokens').innerHTML=r.tokens.length?`<ul class="health-list">${r.tokens.map(t=>`<li class="health-item"><div><strong>${esc(t.label)}</strong><p class="fine">${esc(SCOPE_LABELS[t.scope]||t.scope)} · made ${esc(when(t.created))} · ${t.last_used?'last used '+esc(when(t.last_used)):'not used yet'}</p></div><button class="button small" data-revoke="${t.id}">Revoke</button></li>`).join('')}</ul>`:'<p class="fine">No app has a token yet.</p>';
+  $$('[data-revoke]').forEach(b=>b.onclick=safe(async()=>{await api('connections_revoke',{id:Number(b.dataset.revoke)},true);toast('Token revoked');await loadConnections()}));
+}
+function showNewToken(r){
+  const box=$('#connections-new'),config=JSON.stringify(r.config,null,1);
+  box.innerHTML=`<p><strong>${esc(r.label)}</strong> can connect with this token. Copy it now: FrameAtlas keeps only a fingerprint of it.</p><pre id="connections-config">${esc(config)}</pre><button class="button small" id="connections-copy">Copy settings</button>`;
+  box.classList.remove('hidden');
+  $('#connections-copy').onclick=safe(async()=>{try{await navigator.clipboard.writeText(config);toast('Copied')}catch(e){const range=document.createRange();range.selectNodeContents($('#connections-config'));const sel=getSelection();sel.removeAllRanges();sel.addRange(range);toast('Selected: press ⌘C to copy')}});
 }

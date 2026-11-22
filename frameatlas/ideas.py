@@ -29,6 +29,13 @@ STORY_SEARCH_KEYS = ("query", "provider", "kind", "status", "category", "since",
                      "capture_month", "filename", "source_access", "speech_state", "speech_only", "scene_only", "person", "place")
 
 
+def _quality(scene):
+    """The measured picture quality of a scene (sharp, well exposed, steady; 0–1), when analysis gave one."""
+    q = (scene.get("details") or {}).get("quality") or {}
+    score = q.get("score")
+    return {"picture_quality": round(score, 2)} if isinstance(score, (int, float)) and not isinstance(score, bool) else {}
+
+
 def step_text(value):
     if not isinstance(value, str):
         return ""
@@ -194,7 +201,7 @@ def generate(store, prompt, model="", expand_search=False, *, asset_ids=None, se
         annotations=a['metadata'].get('annotations',{})
         evidence.append({"id": a["id"], "filename": a["filename"], "summary": a["summary"][:min(600,allowance//4)],
                          "owner_corrections": {'summary':str(annotations.get('summary',''))[:min(400,allowance//4)],'tags':[str(t)[:50] for t in annotations.get('tags',[])[:8]] if isinstance(annotations.get('tags',[]),list) else []},
-                         "scenes": [{"start": s["start"], "end": s["end"], "caption": s["caption"][:caption_limit], "scene_key":s["scene_key"], "editor_corrected":bool(s['details'].get('description',{}).get('editor_corrected')), "sample_time":s['details'].get('sample_time'), "source_part":s['details'].get('source_part'), "coverage":s['details'].get('coverage','Native shot description'), "speech": spoken[:min(300,caption_limit//2)], **({"matched_library_search": score[0]} if search_scope is not None else {})} for score, s, spoken in chosen], "speech": a["transcript"][:min(800,allowance//4)]})
+                         "scenes": [{"start": s["start"], "end": s["end"], "caption": s["caption"][:caption_limit], "scene_key":s["scene_key"], "editor_corrected":bool(s['details'].get('description',{}).get('editor_corrected')), "sample_time":s['details'].get('sample_time'), "source_part":s['details'].get('source_part'), "coverage":s['details'].get('coverage','Native shot description'), "speech": spoken[:min(300,caption_limit//2)], **({"matched_library_search": score[0]} if search_scope is not None else {}), **_quality(s)} for score, s, spoken in chosen], "speech": a["transcript"][:min(800,allowance//4)]})
     system = ("You are a careful video story editor. Return JSON with an ideas array of 1 to 3 DISTINCT, modest, practical stories. "
               "Each idea has title, hook, sources (array of {asset_id,start,end,reason}), and pickups (array of short strings). "
               "Put available sources in editing order. The reason is a short editing step for that cited footage. "
@@ -209,6 +216,9 @@ def generate(store, prompt, model="", expand_search=False, *, asset_ids=None, se
               "Use ordinary shot evidence for clip ranges and require shot review. "
               "When Library matches are marked, use them as the main footage. "
               "If footage is insufficient, say so in the hook. Keep language natural.")
+    if any("picture_quality" in sc for e in evidence for sc in e["scenes"]):
+        system += (" picture_quality (0–1) says how sharp, well exposed and steady a shot is: when two shots show the same "
+                   "thing, prefer the higher one.")
     ref_schema={'type':'object','properties':{'asset_id':{'type':'string','enum':[a['id'] for a in evidence]},'start':{'type':'number','minimum':0},'end':{'type':'number','minimum':0},'reason':{'type':'string','maxLength':300}},'required':['asset_id','start','end','reason'],'additionalProperties':False}
     idea_schema={'type':'object','properties':{'title':{'type':'string','maxLength':200},'hook':{'type':'string','maxLength':400},'sources':{'type':'array','minItems':1,'maxItems':6,'items':ref_schema},'pickups':{'type':'array','maxItems':3,'items':{'type':'string','maxLength':300}}},'required':['title','hook','sources','pickups'],'additionalProperties':False}
     schema={'type':'object','properties':{'ideas':{'type':'array','minItems':1,'maxItems':3,'items':idea_schema}},'required':['ideas'],'additionalProperties':False}

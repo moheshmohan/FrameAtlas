@@ -50,7 +50,8 @@ AGENT_ACTIONS = {"activity", "activity_undo", "permissions", "permissions_set", 
                  "google_read_register", "google_read_next", "google_read_script", "google_read_result", "google_read_reset",
                  "supervisor_queue", "supervisor_decide", "footage_record", "footage_videos", "footage_forget",
                  "idea_to_autocut", "footage_import_project", "places_tidy", "person_details", "person_timeline",
-                 "calendar", "calendar_set"}
+                 "calendar", "calendar_set", "connections", "connections_enable", "connections_token",
+                 "connections_revoke", "best_shots"}
 
 
 class Service:
@@ -133,6 +134,20 @@ class Service:
             return family.occasions(self.store)
         if action == "calendar_set":
             return family.set_occasions(self.store, args.get("occasions"))
+        if action == "best_shots":
+            from . import best_shots
+            keep = {k: args[k] for k in best_shots.FILTERS if k in args}
+            return best_shots.best(self.store, whole(args.get("limit", 24)), whole(args.get("per_item", 2)),
+                                   whole(args.get("per_day", 6)), args.get("min_score", 0.0), **keep)
+        from . import connections
+        if action == "connections":  # owner only (the browser): no MCP tool reaches these four
+            return connections.status(self.store)
+        if action == "connections_enable":
+            return connections.set_enabled(self.store, args.get("enabled"))
+        if action == "connections_token":
+            return connections.create(self.store, args.get("label"), args.get("scope"))
+        if action == "connections_revoke":
+            return connections.revoke(self.store, whole(args.get("id")))
         raise ValueError("Unknown action")
 
     def dispatch(self, action, args):

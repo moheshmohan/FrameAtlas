@@ -17,7 +17,7 @@ READ_ACTIONS = {"search", "asset", "coverage", "stats", "jobs", "job", "resolve"
                 "picker_sessions", "picker_queued_items", "picker_reselection", "compare_sources",
                 "idea_pad", "idea_pad_moments", "metadata_coverage", "people", "person", "people_status",
                 "faces_unsorted", "people_suggest",
-                "people_review", "people_compare", "places", "places_trips", "activity", "permissions", "tasks", "task", "ui_state", "health", "google_read_plan", "google_read_next", "google_read_script", "supervisor_queue", "footage_videos", "person_timeline", "calendar"}
+                "people_review", "people_compare", "places", "places_trips", "activity", "permissions", "tasks", "task", "ui_state", "health", "google_read_plan", "google_read_next", "google_read_script", "supervisor_queue", "footage_videos", "person_timeline", "calendar", "best_shots"}
 
 
 def serve(root=DATA, port=7318):
@@ -66,12 +66,58 @@ def serve(root=DATA, port=7318):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+        def mcp_post(self):
+            """MCP's HTTP transport for other AI apps on this Mac: off until the owner turns it on, and
+            each request carries an app's bearer token (connections.py)."""
+            from . import connections
+            from .mcp import handle as mcp_handle
+            if not connections.enabled(store):
+                self.reply({"error": "Connections from other apps are off; turn them on on FrameAtlas's Activity page"}, 404)
+                return
+            who = connections.authenticate(store, self.headers.get("Authorization", ""))
+            if who is None:
+                self.send_response(401)
+                body = b'{"error": "A valid bearer token is required"}'
+                for k, v in {"Content-Type": "application/json", "Content-Length": str(len(body)),
+                             "WWW-Authenticate": 'Bearer realm="FrameAtlas"', "Connection": "close"}.items():
+                    self.send_header(k, v)
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            try:
+                size = int(self.headers.get("Content-Length", "0"))
+                if size < 0 or size > 8 * 1024 ** 2:
+                    raise ValueError("Request exceeds the 8 MiB limit")
+                message = json.loads(self.rfile.read(size))
+                self.close_connection = False
+            except (ValueError, TypeError):
+                self.reply({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Invalid JSON-RPC input"}}, 400)
+                return
+            if not isinstance(message, dict):
+                self.reply({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Send one JSON-RPC message per request"}}, 400)
+                return
+            label, scope = who
+            session = {"client": "http:" + label, "scope": scope, "sampling": False, "elicitation": False}
+            try:
+                response = mcp_handle(service, message, session=session)
+            except Exception:
+                response = {"jsonrpc": "2.0", "id": message.get("id"), "error": {"code": -32603, "message": "Internal error"}}
+            if response is None:  # a notification
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.reply(response)
+
         def do_GET(self):
             if not self.allowed():
                 return
             try:
                 url = urlparse(self.path)
                 path = url.path
+                if path == "/mcp":
+                    self.reply({"error": "Use POST for MCP messages; this server sends no event stream"}, 405)
+                    return
                 if path == "/api/session":
                     self.reply({"csrf": token, "name": "FrameAtlas", "version": "0.1.0"})
                 elif path.startswith("/api/"):
@@ -117,6 +163,9 @@ def serve(root=DATA, port=7318):
             # where it would be read as the start of the next request: close it instead.
             self.close_connection = True
             if not self.allowed():
+                return
+            if urlparse(self.path).path == "/mcp":
+                self.mcp_post()
                 return
             if not secrets.compare_digest(self.headers.get("X-FrameAtlas-Token", ""), token):
                 self.reply({"error": "Reload the local app to refresh its session"}, 403)

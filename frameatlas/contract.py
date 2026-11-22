@@ -14,7 +14,7 @@ TIERS = {
         "people_list", "person_get", "faces_unsorted", "people_suggest", "people_review", "people_compare",
         "places_list", "places_trips", "agent_activity", "agent_permissions", "catalog_tasks", "catalog_task",
         "catalog_wait", "ui_state", "catalog_health", "google_read_plan", "google_read_next", "google_read_script",
-        "supervisor_queue", "footage_videos", "person_timeline", "calendar"},
+        "supervisor_queue", "footage_videos", "person_timeline", "calendar", "catalog_best_shots"},
     "write": {
         "catalog_storage_limit", "catalog_retry_speech", "catalog_confirm_studio_download",
         "catalog_cleanup_studio_download", "catalog_cancel", "catalog_queue_control", "catalog_ideas",
@@ -48,7 +48,8 @@ LONG = {"idea_to_autocut", "footage_import_project", "catalog_ideas", "idea_pad_
         "catalog_metadata_backfill", "catalog_import_takeout", "catalog_import_native", "catalog_import_manifest"}
 # Service actions only the owner reaches, through the browser UI: an agent cannot widen its own
 # permissions or approve its own calls.
-OWNER_ONLY = {"permissions_set", "confirmation_decide"}
+OWNER_ONLY = {"permissions_set", "confirmation_decide", "connections", "connections_enable", "connections_token",
+              "connections_revoke"}
 # The open page's own channel (its session token, reporting its state, polling for what to show).
 PAGE_ONLY = {"session", "ui_report", "ui_poll"}
 # Tools a catalog_batch may run: everything except destructive and outside calls, which need their own call.
@@ -100,6 +101,7 @@ OUTPUT_REQUIRED = {
     "person_timeline": ["id", "years", "together"],
     "calendar": ["occasions"],
     "calendar_set": ["occasions"],
+    "catalog_best_shots": ["shots", "items_considered", "scored_scenes"],
     "idea_pad_list": ["items", "total"],
     "idea_pad_moments": ["moments"],
     "people_status": ["faces", "people", "named", "running"],
