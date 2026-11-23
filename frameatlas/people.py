@@ -35,7 +35,7 @@ PROGRESS_KEY = "face_scan"
 def ensure(db):
     """The people tables (the catalogue creates them on open; this covers a connection to an
     older file). Runs its script only when they are missing, so it never ends a transaction."""
-    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='face_log'").fetchone():
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='external_reads'").fetchone():
         return
     db.executescript(SCHEMA)
 
@@ -69,6 +69,9 @@ SCHEMA = """
         CREATE TABLE IF NOT EXISTS external_people (
           source TEXT NOT NULL, name TEXT NOT NULL, asset_id TEXT NOT NULL REFERENCES assets(id) ON DELETE CASCADE,
           PRIMARY KEY(source, name, asset_id));
+        CREATE TABLE IF NOT EXISTS external_reads (
+          source TEXT NOT NULL, name TEXT NOT NULL, items TEXT NOT NULL DEFAULT '[]', seen INTEGER NOT NULL DEFAULT 0,
+          updated REAL NOT NULL, PRIMARY KEY(source, name));
 """
 
 
@@ -546,11 +549,14 @@ def _log(db, actor, action, status, *, face=None, person=None, other=None, liken
 def _dismissed(db):
     """Pairs the owner or an agent said no to, so they are not proposed again."""
     out = set()
-    for action, face, person, other in db.execute(
-            "SELECT action, face_id, person_id, other_id FROM face_log WHERE status IN ('dismissed','undone')"):
+    for action, face, person, other, detail in db.execute(
+            "SELECT action, face_id, person_id, other_id, detail FROM face_log WHERE status IN ('dismissed','undone')"):
         out.add((action, face, person, other))
         if action == "merge":
             out.add((action, face, other, person))
+        if action == "name":  # this person is not that name: never named or proposed so again
+            with contextlib.suppress(ValueError, TypeError, AttributeError):
+                out.add(("name", json.loads(detail).get("name"), person))
     return out
 
 
@@ -739,17 +745,24 @@ def review(store, *, status="proposed", actor="", action="", limit=50, offset=0)
 def decide(store, log_id, decision, *, actor="owner"):
     """Apply a proposal, turn it down, or undo a change the sorter made."""
     lid = _int(log_id, "log entry")
-    if decision not in ("apply", "dismiss", "undo"):
-        raise ValueError("decision is apply, dismiss or undo")
+    if decision not in ("apply", "apply_other", "dismiss", "undo"):
+        raise ValueError("decision is apply, apply_other, dismiss or undo")
     with store.connect() as db:
         ensure(db)
         db.execute("BEGIN IMMEDIATE")
         e = db.execute("SELECT * FROM face_log WHERE id=?", (lid,)).fetchone()
         if e is None:
             raise ValueError("Log entry not found")
-        want = {"apply": "proposed", "dismiss": "proposed", "undo": "applied"}[decision]
+        want = {"apply": "proposed", "apply_other": "proposed", "dismiss": "proposed", "undo": "applied"}[decision]
         if e["status"] != want:
-            raise ValueError(f"Only a {want} entry can be {decision}ed" if decision != "apply" else "Only a proposed entry can be applied")
+            raise ValueError(f"Only a {want} entry can be {decision}ed" if decision not in ("apply", "apply_other")
+                             else "Only a proposed entry can be applied")
+        if decision == "apply_other":  # a mixed name goes to the other candidate instead
+            if e["action"] != "name" or e["other_id"] is None:
+                raise ValueError("Only a name with another candidate can go to the other one")
+            db.execute("UPDATE face_log SET person_id=other_id, other_id=person_id WHERE id=?", (lid,))
+            e = db.execute("SELECT * FROM face_log WHERE id=?", (lid,)).fetchone()
+            decision = "apply"
         if decision == "dismiss":
             db.execute("UPDATE face_log SET status='dismissed', at=? WHERE id=?", (time.time(), lid))
             return {"id": lid, "status": "dismissed"}
@@ -870,38 +883,60 @@ def compare(store, person, other=None, faces=None, *, n=6):
 
 # ---- names from another library (Google Photos' people)
 
-def _utc_index(db):
+SLACK = 2          # seconds an item may be off when no catalogue item has its exact time
+SAME_SECOND = 10   # at most this many catalogue items taken for one second (a burst, or copies)
+MAX_ITEMS = 20000
+SOLVE_NAMES = 14   # names in one tangle solved exactly; larger tangles are solved greedily
+RIVAL_BELOW = 0.15  # candidates this far below min_share still count as the alternative
+
+
+def _seconds_index(db):
+    """Catalogue items by capture second (as stored, UTC) and kind."""
+    from datetime import datetime, timezone
     index = {}
     for aid, captured, kind in db.execute("SELECT id, captured, kind FROM assets WHERE captured<>''"):
-        key = captured[:19]
-        if len(key) == 19:
-            index.setdefault(key, []).append((aid, kind))
+        try:
+            at = datetime.strptime(captured[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        index.setdefault(int(at.timestamp()), []).append((aid, kind))
     return index
 
 
-def match_items(db, items):
-    """Catalogue items for another library's items given by local capture time to the second
-    (no time zone) and kind: the time zone is found by trying every quarter-hour offset and
-    preferring the offset most items agree on."""
-    from datetime import datetime, timedelta
-    index = _utc_index(db)
+def _local_seconds(item):
+    from datetime import datetime, timezone
+    if not isinstance(item, dict):
+        return None
+    try:
+        local = datetime.strptime(str(item.get("local", ""))[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+    return int(local.replace(tzinfo=timezone.utc).timestamp())
+
+
+def match_sets(db, items, *, slack=SLACK, index=None):
+    """The catalogue items each of another library's items may be, given its local capture time to
+    the second (no time zone) and kind: every catalogue item of that kind at that second (a burst,
+    or copies of one picture), else the one item up to `slack` seconds off. The time zone is found
+    by trying every quarter-hour offset and preferring the offset most items agree on."""
+    index = _seconds_index(db) if index is None else index
     hits, votes = [], {}
     for item in items:
-        if not isinstance(item, dict):
-            hits.append({})
-            continue
-        try:
-            local = datetime.strptime(str(item.get("local", ""))[:19], "%Y-%m-%dT%H:%M:%S")
-        except ValueError:
+        local = _local_seconds(item)
+        if local is None:
             hits.append({})
             continue
         kind = item.get("kind")
         found = {}
         for q in range(-48, 57):
-            key = (local - timedelta(minutes=15 * q)).strftime("%Y-%m-%dT%H:%M:%S")
-            ids = [aid for aid, k in index.get(key, ()) if not kind or k == kind]
-            if len(ids) == 1:
-                found[q] = ids[0]
+            at = local - 900 * q
+            ids = [aid for aid, k in index.get(at, ()) if not kind or k == kind]
+            if not ids and slack:
+                near = [aid for d in range(1, slack + 1) for s in (d, -d) for aid, k in index.get(at + s, ())
+                        if not kind or k == kind]
+                ids = near if len(near) == 1 else []
+            if ids:
+                found[q] = ids[:SAME_SECOND]
         hits.append(found)
         if len(found) == 1:
             q = next(iter(found))
@@ -913,107 +948,255 @@ def match_items(db, items):
             out.append(next(iter(found.values())))
         else:
             q = next((q for q in order if q in found), None)
-            out.append(found[q] if q is not None else None)
+            out.append(found[q] if q is not None else [])
     return out
 
 
-def import_names(store, source, people_list, *, apply=False, actor="google", min_share=0.35, min_count=3,
-                 min_lift=5.0, margin=0.15):
-    """Name our people after another library's named people: each name's items are matched to the
-    catalogue, and the person seen in the largest share of them gets the name (an owner's name is
-    never replaced; a different existing name becomes a proposal). Other people seen in most of a
-    name's items are proposed as the same person (merges, applied when their faces agree too).
+def match_items(db, items):
+    """The one catalogue item for each item, or None when there is none or more than one."""
+    return [s[0] if len(s) == 1 else None for s in match_sets(db, items)]
 
-    People seen everywhere (the family behind the camera) are in most of everyone's items, so a
-    person only counts for a name when seen there `min_lift` times more often than across the
-    whole catalogue, or in most of the name's items. A person already called a name keeps it.
-    When another person comes close for the same name, or another name comes close for the same
-    person, the result is mixed and only proposed."""
+
+def unpack_items(packed):
+    """Items from the browser script's packed form: one token per item, its kind (P photo, V video)
+    and its local capture time as base-36 seconds since 1970 read as UTC ("Ps8bzlr Vs5vdmb")."""
+    from datetime import datetime, timezone
+    if not isinstance(packed, str) or len(packed) > 400000:
+        raise ValueError("packed is the script's text of up to 400000 characters")
+    out = []
+    for tok in packed.split():
+        if tok[:1] not in ("P", "V") or not 2 <= len(tok) <= 10 or not tok[1:].isalnum():
+            continue
+        try:
+            at = datetime.fromtimestamp(int(tok[1:], 36), timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            continue
+        out.append({"kind": "photo" if tok[0] == "P" else "video", "local": at.strftime("%Y-%m-%dT%H:%M:%S")})
+    return out[:MAX_ITEMS]
+
+
+def _store_reads(db, source, people_list):
+    for entry in people_list:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not entry["name"].strip():
+            raise ValueError("Every person needs a name")
+        name = entry["name"].strip()[:120]
+        items = entry.get("items")
+        if items is None and "packed" in entry:
+            items = unpack_items(entry["packed"])
+        if not isinstance(items, list) or len(items) > MAX_ITEMS:
+            raise ValueError("items is a list of up to 20000 {kind, local}")
+        items = [{"kind": i.get("kind"), "local": str(i.get("local", ""))[:19]} for i in items if isinstance(i, dict)]
+        seen = entry.get("seen", len(items))
+        seen = seen if type(seen) is int and 0 <= seen < 10 ** 7 else len(items)
+        db.execute("""INSERT INTO external_reads(source,name,items,seen,updated) VALUES(?,?,?,?,?)
+            ON CONFLICT(source,name) DO UPDATE SET items=excluded.items, seen=excluded.seen, updated=excluded.updated""",
+                   (source, name, json.dumps(items), seen, time.time()))
+
+
+def _faces_by_asset(db, assets):
+    """For some catalogue items: the people in each, and how many faces each shows."""
+    people_in, faces_in = {}, {}
+    assets = list(assets)
+    for i in range(0, len(assets), 900):
+        part = assets[i:i + 900]
+        q = ",".join("?" * len(part))
+        for aid, pid in db.execute(f"SELECT asset_id, person_id FROM faces WHERE asset_id IN ({q})", part):
+            faces_in[aid] = faces_in.get(aid, 0) + 1
+            if pid is not None:
+                people_in.setdefault(aid, set()).add(pid)
+    return people_in, faces_in
+
+
+def _solve(names, edges, banned=None, budget=200000):
+    """The pairing of names with people (each at most once) of the largest total weight: exact for a
+    small tangle, greedy past `budget` steps. edges: {(name, person): weight}."""
+    options = {n: sorted(((w, p) for (m, p), w in edges.items() if m == n and (m, p) != banned), reverse=True)[:6]
+               for n in names}
+    order = sorted(names, key=lambda n: -(options[n][0][0] if options[n] else 0))
+    bound = [0.0] * (len(order) + 1)
+    for i in range(len(order) - 1, -1, -1):
+        bound[i] = bound[i + 1] + (options[order[i]][0][0] if options[order[i]] else 0)
+    best = [-1.0, {}]
+    steps = [0]
+
+    def go(i, used, total, chosen):
+        steps[0] += 1
+        if total + bound[i] <= best[0] + 1e-9 or steps[0] > budget:
+            return
+        if i == len(order):
+            best[0], best[1] = total, dict(chosen)
+            return
+        n = order[i]
+        for w, p in options[n]:
+            if p not in used:
+                used.add(p)
+                chosen[n] = p
+                go(i + 1, used, total + w, chosen)
+                used.discard(p)
+                del chosen[n]
+        go(i + 1, used, total, chosen)
+
+    if len(order) <= SOLVE_NAMES:
+        go(0, set(), 0.0, {})
+    if best[0] < 0 or steps[0] > budget:  # greedy
+        chosen, used, total = {}, set(), 0.0
+        for w, n, p in sorted(((w, n, p) for n in order for w, p in options[n]), reverse=True):
+            if n not in chosen and p not in used:
+                chosen[n], total = p, total + w
+                used.add(p)
+        best = [total, chosen]
+    return best[0], best[1]
+
+
+def import_names(store, source, people_list=None, *, apply=False, replace=False, actor="google", min_share=0.35,
+                 min_count=3, min_lift=5.0, margin=0.3):
+    """Name our people after another library's named people. Each name's read (its items' local
+    capture times) is kept, and every import weighs all the names read so far together.
+
+    For each name, its items are matched to the catalogue (all items at the same second count, as
+    a burst or copies show the same people) and the people seen in them are counted, a group photo
+    counting for less than a picture of one or two. A person counts for a name only when seen in at
+    least `min_share` of its items and far more often there than across the whole catalogue
+    (`min_lift` times, or in most of the name's items): the family behind the camera is in
+    everyone's pictures. Names and people are then paired together, each at most once, so that
+    two names always seen together (a couple) go to the two people rather than both to one.
+
+    A pairing is applied only when the next best pairing is clearly worse (by `margin` of its
+    weight) and the person is seen in at least half as many of the name's items as the person
+    seen most; otherwise it is mixed and only proposed, with the other candidate. A person already
+    called a name keeps it, an owner's name is never replaced (a different name is proposed), and
+    split groups of the same person are merged when their faces agree too. `replace` forgets the
+    earlier reads of this source first."""
     if not isinstance(source, str) or not source or len(source) > 40 or not source.replace("_", "").isalnum():
         raise ValueError("source is a short name like google_photos")
-    if not isinstance(people_list, list) or not people_list or len(people_list) > 2000:
+    if people_list is not None and (not isinstance(people_list, list) or not people_list or len(people_list) > 2000):
         raise ValueError("people is a list of {name, items}")
     if actor not in ACTORS:
         raise ValueError("Unknown actor")
-    out = {"names": 0, "matched": 0, "named": 0, "proposed": 0, "merged": 0, "unmatched_names": []}
+    if not isinstance(apply, bool) or not isinstance(replace, bool):
+        raise ValueError("apply and replace are true or false")
+    out = {"names": 0, "matched": 0, "named": 0, "proposed": 0, "merged": 0, "mixed": [], "unmatched_names": []}
     with store.connect() as db:
         ensure(db)
         db.execute("BEGIN IMMEDIATE")
+        if replace:
+            db.execute("DELETE FROM external_reads WHERE source=?", (source,))
+        if people_list:
+            _store_reads(db, source, people_list)
+        reads = db.execute("SELECT name, items FROM external_reads WHERE source=? ORDER BY name", (source,)).fetchall()
+        if not reads:
+            raise ValueError("No names read yet: give people [{name, items}]")
         db.execute("UPDATE face_log SET status='superseded' WHERE status='proposed' AND actor=?", (actor,))
+        db.execute("DELETE FROM external_people WHERE source=?", (source,))
         dismissed = _dismissed(db)
         with_faces = db.execute("SELECT count(DISTINCT asset_id) FROM faces").fetchone()[0] or 1
         seen_in = dict(db.execute("""SELECT person_id, count(DISTINCT asset_id) FROM faces
             WHERE person_id IS NOT NULL GROUP BY person_id""").fetchall())
-        shares, pieces, near = [], [], []
-        for entry in people_list:
-            if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not entry["name"].strip():
-                raise ValueError("Every person needs a name")
-            name = entry["name"].strip()[:120]
-            items = entry.get("items") or []
-            if not isinstance(items, list) or len(items) > 20000:
-                raise ValueError("items is a list of up to 20000 {kind, local}")
-            assets = {a for a in match_items(db, items) if a}
+        index = _seconds_index(db)
+        matched = {}
+        for name, items in reads:
+            sets = {frozenset(s) for s in match_sets(db, json.loads(items), index=index) if s}
+            matched[name] = sets  # one item per distinct match: twenty shares of one picture count once
+        people_in, faces_in = _faces_by_asset(db, {a for sets in matched.values() for s in sets for a in s})
+        edges, pieces, best_share = {}, [], {}
+        for name, sets in matched.items():
             out["names"] += 1
+            assets = {a for s in sets for a in s}
             out["matched"] += len(assets)
             for aid in assets:
                 db.execute("INSERT OR IGNORE INTO external_people(source,name,asset_id) VALUES(?,?,?)", (source, name, aid))
-            if len(assets) < min_count:
+            if len(sets) < min_count:
                 out["unmatched_names"].append(name)
                 continue
-            q = ",".join("?" * len(assets))
-            for pid, n in db.execute(f"""SELECT person_id, count(DISTINCT asset_id) FROM faces
-                    WHERE person_id IS NOT NULL AND asset_id IN ({q}) GROUP BY person_id""", list(assets)):
-                share = n / len(assets)
+            seen, weight = {}, {}
+            for s in sets:
+                counts = {}
+                for aid in s:
+                    for pid in people_in.get(aid, ()):
+                        counts[pid] = counts.get(pid, 0) + 1
+                crowd = max(1.0, sum(faces_in.get(a, 0) for a in s) / len(s))
+                for pid, c in counts.items():
+                    seen[pid] = seen.get(pid, 0) + c / len(s)
+                    weight[pid] = weight.get(pid, 0) + c / len(s) / crowd
+            for pid, n in seen.items():
+                share = n / len(sets)
                 lift = share * with_faces / max(seen_in.get(pid, 1), 1)
-                if n >= min_count and (lift >= min_lift or share >= 0.6):
-                    near.append((share, n, name, pid, len(assets)))  # rivals, even below min_share
-                    if share >= min_share:
-                        shares.append(near[-1])
+                if n >= min_count and (lift >= min_lift or share >= 0.6) and share >= min_share - RIVAL_BELOW:
+                    # a candidate below min_share is never named, but still makes another one less sure
+                    edges[(name, pid)] = {"share": share, "weight": weight[pid] / len(sets), "n": n, "of": len(sets),
+                                          "ok": share >= min_share}
+                    if share > best_share.get(name, (0, None))[0]:
+                        best_share[name] = (share, pid)
                 if n >= min_count and share >= 0.5:  # split groups; merged only when the faces agree
-                    pieces.append((share, n, name, pid, len(assets)))
+                    pieces.append((share, n, name, pid, len(sets)))
         info = {r["id"]: dict(r) for r in db.execute("SELECT id, name, hidden FROM people")}
-        size = dict(db.execute("SELECT person_id, count(*) FROM faces WHERE person_id IS NOT NULL GROUP BY person_id").fetchall())
-        # the largest share first; on a tie, the person already called that, then the larger group
-        shares.sort(key=lambda x: (x[0], info.get(x[3], {}).get("name") == x[2], size.get(x[3], 0)), reverse=True)
-        taken_names, taken_people, primary = set(), set(), {}
-        wanted = {e["name"].strip()[:120] for e in people_list}
-        for pid, row in info.items():  # a person already called a name keeps it
-            if row["name"] in wanted and row["name"] not in taken_names:
-                taken_names.add(row["name"])
-                taken_people.add(pid)
+        primary, fixed = {}, set()
+        for pid, row in sorted(info.items()):  # a person already called a name keeps it
+            if row["name"] in matched and row["name"] not in primary:
                 primary[row["name"]] = pid
-        out["mixed"] = []
-        for share, n, name, pid, total in shares:
-            if name in taken_names or pid in taken_people:
-                continue
-            taken_names.add(name)
-            taken_people.add(pid)
-            primary[name] = pid
-            current = info[pid]["name"]
-            detail = {"name": name, "source": source, "share": round(share, 3), "items": n, "of": total}
-            rival = next((x for x in near if x[0] >= share - margin and (x[2] == name) != (x[3] == pid)
-                          and x[3] not in taken_people - {pid} and x[2] not in taken_names - {name}), None)
-            if rival is not None and not current:
-                out["mixed"].append(name)
-                del primary[name]  # nothing to merge into either
-                if ("name", None, pid, None) not in dismissed:
-                    _log(db, actor, "name", "proposed", person=pid, likeness=share,
-                         detail={**detail, "why": f"mixed: also #{rival[3]} for {rival[2]}" if rival[2] != name
-                                 else f"mixed: #{rival[3]} is seen almost as often"})
+                fixed.add(pid)
+        free = {k: v for k, v in edges.items() if k[0] not in primary and k[1] not in fixed
+                and ("name", k[0], k[1]) not in dismissed}  # the owner said this person is not that name
+        # tangles: names and people joined by a shared candidate are paired together
+        parent = {}
+
+        def root(x):
+            while parent.setdefault(x, x) != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+        for n, p in free:
+            parent[root(("n", n))] = root(("p", p))
+        tangles, held = {}, set()
+        for n, p in free:
+            tangles.setdefault(root(("n", n)), set()).add(n)
+        for names in tangles.values():
+            w = {k: v["weight"] for k, v in free.items() if k[0] in names}
+            total, pairs = _solve(sorted(names), w)
+            for name in sorted(names):
+                pid = pairs.get(name)
+                if pid is None:
+                    continue
+                e = free[(name, pid)]
+                if not e["ok"]:
+                    continue
+                alt_total, alt = _solve(sorted(names), w, banned=(name, pid))
+                regret = total - alt_total
+                others = sorted(((v["share"], p) for (m, p), v in free.items() if m == name and p != pid), reverse=True)
+                other = alt.get(name) or (others[0][1] if others else None)
+                taker = next((m for m, p in alt.items() if p == pid and m != name), None)
+                detail = {"name": name, "source": source, "share": round(e["share"], 3), "items": round(e["n"]),
+                          "of": e["of"], "weight": round(e["weight"], 3), "sure": round(regret / max(e["weight"], 1e-9), 2)}
+                current = info[pid]["name"]
+                most, most_pid = best_share.get(name, (0, None))
+                if regret < margin * e["weight"] or e["share"] < 0.5 * most:
+                    if current:
+                        continue
+                    weaker = e["share"] < 0.5 * most
+                    other = most_pid if weaker else other
+                    out["mixed"].append(name)
+                    held.update(x for x in (pid, other) if x is not None)
+                    why = (f"mixed: seen more with #{most_pid}" if weaker else f"mixed: also #{pid} for {taker}" if taker
+                           else f"mixed: #{other} is seen almost as often" if other is not None else "mixed")
+                    if ("name", name, pid) not in dismissed:
+                        _log(db, actor, "name", "proposed", person=pid, other=other, likeness=e["share"],
+                             detail={**detail, "why": why, **({"rival": taker} if taker else {})})
+                        out["proposed"] += 1
+                    continue
+                primary[name] = pid
+                if not current and apply:
+                    db.execute("UPDATE people SET name=?, updated=? WHERE id=?", (name, time.time(), pid))
+                    _log(db, actor, "name", "applied", person=pid, likeness=e["share"], detail=detail, previous={"name": ""})
+                    out["named"] += 1
+                elif ("name", name, pid) not in dismissed:
+                    _log(db, actor, "name", "proposed", person=pid, likeness=e["share"],
+                         detail={**detail, "why": f"already named {current}" if current else "proposed"})
                     out["proposed"] += 1
-                continue
-            if not current and apply:
-                db.execute("UPDATE people SET name=?, updated=? WHERE id=?", (name, time.time(), pid))
-                _log(db, actor, "name", "applied", person=pid, likeness=share, detail=detail, previous={"name": ""})
-                out["named"] += 1
-            elif ("name", None, pid, None) not in dismissed:
-                _log(db, actor, "name", "proposed", person=pid, likeness=share,
-                     detail={**detail, "why": f"already named {current}" if current else "proposed"})
-                out["proposed"] += 1
+        taken = set(primary.values()) | held
         cents = _centroids(db)
         for share, n, name, pid, total in sorted(pieces, reverse=True):
             into = primary.get(name)
-            if into is None or pid == into or pid in taken_people or share < 0.5:
+            if into is None or pid == into or pid in taken or share < 0.5:
                 continue
             if db.execute("SELECT 1 FROM people WHERE id=?", (pid,)).fetchone() is None or ("merge", None, into, pid) in dismissed:
                 continue
@@ -1032,6 +1215,7 @@ def import_names(store, source, people_list, *, apply=False, actor="google", min
                      detail={"name": name, "source": source, "share": round(share, 3)})
                 out["proposed"] += 1
     return out
+
 
 
 def asset_people(store, asset_id):

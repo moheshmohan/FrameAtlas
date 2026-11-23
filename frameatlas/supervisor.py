@@ -19,8 +19,9 @@ def _question(e):
         return f"Are {person} and {other} the same person? Their faces are {likeness:.2f} alike. Apply merges {other} into {person}."
     if e["action"] == "name":
         why = f" ({detail['why']})" if detail.get("why") else ""
+        either = (f" Or is it {other}? apply_other gives the name to {other} instead." if e.get("other_id") else "")
         return (f"Should {person} be named '{detail.get('name', '')}' after Google Photos? {detail.get('items', 0)} of "
-                f"{detail.get('of', 0)} of that name's photos show them{why}.")
+                f"{detail.get('of', 0)} of that name's photos show them{why}.{either}")
     if e["action"] == "move":
         return (f"Does this face belong to {person} rather than {other}? It is {likeness:.2f} like {person} and "
                 f"{detail.get('own', 0):.2f} like {other}.")
@@ -49,7 +50,8 @@ def queue(store, kind="", limit=10, offset=0):
     for e in r["items"]:
         crops = _images(e)
         items.append({"id": f"people:{e['id']}", "kind": e["action"], "from": e["actor"], "likeness": e.get("likeness"),
-                      "question": _question(e), "answers": ["apply", "dismiss"], "item": e.get("asset_id"),
+                      "question": _question(e),
+                      "answers": ["apply", "apply_other", "dismiss"] if e["action"] == "name" and e.get("other_id") else ["apply", "dismiss"], "item": e.get("asset_id"),
                       "person": e.get("person_id"), "other": e.get("other_id"),
                       "images": [c["label"] for c in crops]})
         for c in crops:
@@ -62,7 +64,7 @@ def queue(store, kind="", limit=10, offset=0):
 def decide(store, item_id, decision):
     if not isinstance(item_id, str) or not item_id.startswith("people:") or not item_id[7:].isdigit():
         raise ValueError("Use an id from supervisor_queue, such as people:17")
-    if decision not in ("apply", "dismiss"):
-        raise ValueError("decision is apply or dismiss")
+    if decision not in ("apply", "apply_other", "dismiss"):
+        raise ValueError("decision is apply, apply_other or dismiss")
     result = people.decide(store, int(item_id[7:]), decision, actor="agent")
     return {"id": item_id, "decision": decision, "result": result}

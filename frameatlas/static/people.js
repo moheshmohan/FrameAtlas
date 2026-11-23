@@ -151,11 +151,14 @@ function reviewRow(e){
   link:[`${face}<span class="arrow">→</span>${pc}`,`This face looks like ${esc(pname)}`],
   move:[`${face}<span class="arrow">→</span>${pc}`,`This face of ${esc(oname)} looks more like ${esc(pname)}`],
   unlink:[`${face}<span class="arrow">✕</span>${pc}`,`This face looks unlike ${esc(pname)}`],
-  name:[pc,`Call ${esc(pname)} “${esc(e.detail.name||'')}”`+(e.detail.share!=null?` · in ${Math.round(e.detail.share*100)}% of ${fmt(e.detail.of)} of their ${esc(WHO[e.actor]||e.actor)} items`:'')+(e.detail.why&&e.detail.why!=='proposed'?` · ${esc(e.detail.why)}`:'')]}[e.action]||['',''];
- const buttons=e.status==='proposed'?`<button class="button small primary" data-decide="apply" data-log="${e.id}" type="button">${e.action==='merge'?'Merge':e.action==='name'?'Use name':e.action==='unlink'?'Unlink':'Link'}</button><button class="button small" data-decide="dismiss" data-log="${e.id}" type="button">No</button>`
+  name:[e.other_id?`${pc}<span class="arrow">or</span>${oc}`:pc,`${e.other_id?`Is “${esc(e.detail.name||'')}” ${esc(pname)} or ${esc(oname)}?`:`Call ${esc(pname)} “${esc(e.detail.name||'')}”`}`+(e.detail.share!=null?` · ${e.other_id?'the first is ':''}in ${Math.round(e.detail.share*100)}% of ${fmt(e.detail.of)} of their ${esc(WHO[e.actor]||e.actor)} items`:'')+(e.detail.why&&e.detail.why!=='proposed'?` · ${esc(e.detail.why)}`:'')]}[e.action]||['',''];
+ const two=e.action==='name'&&e.other_id;
+ const short=(n,id)=>n?esc(n.split(' ')[0]):`#${id}`;
+ const buttons=e.status==='proposed'?(two?`<button class="button small primary" data-decide="apply" data-log="${e.id}" type="button">${short(e.person_name,e.person_id)}</button><button class="button small primary" data-decide="apply_other" data-log="${e.id}" type="button">${short(e.other_name,e.other_id)}</button>`
+   :`<button class="button small primary" data-decide="apply" data-log="${e.id}" type="button">${e.action==='merge'?'Merge':e.action==='name'?'Use name':e.action==='unlink'?'Unlink':'Link'}</button>`)+`<button class="button small" data-decide="dismiss" data-log="${e.id}" type="button">${two?'Neither':'No'}</button>`
   :e.status==='applied'?`<button class="button small" data-decide="undo" data-log="${e.id}" type="button">Undo</button>`:'';
- const look=e.person_id?`<button class="text-button" data-person-open="${e.person_id}" type="button">Open</button>`:'';
- return `<div class="review-row" data-log-row="${e.id}"><div class="review-faces">${what[0]}</div><div class="review-text"><strong>${what[1]}</strong><small>${pct?pct+' alike · ':''}${esc(WHO[e.actor]||e.actor)}${e.filename?' · '+esc(e.filename):''}</small></div><div class="face-actions">${look}${buttons}</div></div>`;
+ const look=(e.person_id?`<button class="text-button" data-person-open="${e.person_id}" type="button">Open</button>`:'')+(two?`<button class="text-button" data-person-open="${e.other_id}" type="button">Open #${e.other_id}</button>`:'');
+ return `<div class="review-row" data-log-row="${e.id}"><div class="review-faces">${what[0]}</div><div class="review-text"><strong>${what[1]}</strong><small>${pct&&e.action!=='name'?pct+' alike · ':''}${esc(WHO[e.actor]||e.actor)}${e.filename?' · '+esc(e.filename):''}</small></div><div class="face-actions">${look}${buttons}</div></div>`;
 }
 async function loadReview(more=false){
  const data=await api('people_review',{status:$('#review-status').value,limit:'50',offset:String(more?reviewItems.length:0)});
@@ -166,7 +169,7 @@ async function loadReview(more=false){
 }
 async function decideReview(id,decision){
  await api('people_review_decide',{id,decision},true);
- toast({apply:'Done',dismiss:'Turned down; it will not be suggested again',undo:'Undone'}[decision]);
+ toast({apply:'Done',apply_other:'Done',dismiss:'Turned down; it will not be suggested again',undo:'Undone'}[decision]);
  reviewItems=reviewItems.filter(e=>e.id!==id);reviewTotal-=1;
  const row=$(`[data-log-row="${id}"]`);if(row)row.remove();
  if(!reviewItems.length)await loadReview();

@@ -99,7 +99,7 @@ class Service:
         if action == "google_read_next":
             return google_reads.next_names(self.store, args.get("kind", "places"), whole(args.get("count", 5)))
         if action == "google_read_script":
-            return google_reads.script(whole(args.get("step", 3)))
+            return google_reads.script(whole(args.get("step", 3)), args.get("kind", "places"))
         if action == "google_read_result":
             return google_reads.result(self.store, args)
         if action == "google_read_reset":
@@ -253,9 +253,10 @@ class Service:
                 faces = [f for f in faces.split(",") if f.strip()]
             return people.compare(self.store, args.get("person"), args.get("other"), faces, n=args.get("count", 6))
         if action == "people_import_names":
-            if set(args) - {"source", "people", "apply"} or not isinstance(args.get("apply", False), bool):
-                raise ValueError("Import with: source, people, apply")
-            return people.import_names(self.store, args.get("source", "google_photos"), args.get("people"), apply=args.get("apply", False))
+            if set(args) - {"source", "people", "apply", "replace"} or not isinstance(args.get("apply", False), bool):
+                raise ValueError("Import with: source, people, apply, replace")
+            return people.import_names(self.store, args.get("source", "google_photos"), args.get("people"),
+                                       apply=args.get("apply", False), replace=args.get("replace", False))
         if action == "places_import":
             if set(args) - {"source", "places"}:
                 raise ValueError("Import with: source, places")

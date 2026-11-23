@@ -15,7 +15,7 @@ HOUR = 3600
 SEARCH_BUDGET = 25          # searches per hour before Google is likely to throttle (it varies, 25 to 55)
 THROTTLE_ITEMS = 60         # an incomplete read with at most this many items looks like Google's throttle
 MAX_NAMES = 5000
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "google_photos_places.js"
+SCRIPTS = {kind: Path(__file__).resolve().parent.parent / "scripts" / f"google_photos_{kind}.js" for kind in KINDS}
 KEY = re.compile(r"[0-9a-f]{1,32}")
 
 
@@ -105,19 +105,27 @@ def next_names(store, kind, count=5):
             "note": "" if rows else ("This hour's search budget is used; wait." if not left else "Nothing left to read.")}
 
 
-def script(step):
-    """The browser script's step (1 list, 2 Maps positions, 3 one place's days)."""
-    if step not in (1, 2, 3):
-        raise ToolError("invalid_arguments", "step is 1, 2 or 3")
+def script(step, kind="places"):
+    """The browser script's step: for places 1 list, 2 Maps positions, 3 one place's days; for
+    people 1 list, 3 one person's photos."""
+    kind = _kind(kind)
+    if step not in ((1, 2, 3) if kind == "places" else (1, 3)):
+        raise ToolError("invalid_arguments", "step is 1, 2 or 3 for places, 1 or 3 for people")
     try:
-        text = SCRIPT.read_text()
+        text = SCRIPTS[kind].read_text()
     except OSError:
-        raise ToolError("failed", "The places script is missing from this FrameAtlas checkout") from None
+        raise ToolError("failed", f"The {kind} script is missing from this FrameAtlas checkout") from None
     header = text.split("// ---- step 1", 1)[0]
     parts = re.split(r"^// ---- step (\d)[^\n]*\n", text, flags=re.M)
     steps = {int(parts[i]): parts[i + 1].strip() for i in range(1, len(parts) - 1, 2)}
     if step not in steps:
-        raise ToolError("failed", "The places script does not have that step")
+        raise ToolError("failed", f"The {kind} script does not have that step")
+    if kind == "people":
+        how = {1: "Run on https://photos.google.com/people. Pass its result to google_read_register as entries (kind people).",
+               3: "Set NAME, run on a freshly loaded https://photos.google.com/people (it opens the person with a full page "
+                  "load), run again on the person's page, then pass {name, items, complete, packed} to google_read_result "
+                  "(kind people). When every name is read, people_import_names with apply: true names the clear ones."}[step]
+        return {"step": step, "kind": kind, "how": how, "script": steps[step], "notes": header.strip()}
     how = {1: "Run on https://photos.google.com/places. Pass its result to google_read_register as entries [{name, key}].",
            2: "Run on any https://www.google.com/maps page with KEYS set; read window.frameatlasMaps when done and pass "
               "positions with google_read_result or places_import.",
@@ -170,10 +178,13 @@ def result(store, args):
             if packed:
                 imported = places.import_places(store, "google_photos", [place])
         else:
-            found = args.get("people_items")
+            found, packed = args.get("people_items"), args.get("packed")
+            if isinstance(packed, str) and packed.strip() and not found:
+                found = people.unpack_items(packed)
             if not isinstance(found, list) or not found:
-                raise ToolError("invalid_arguments", "people_items is [{kind, local}] for this person's photos")
-            imported = people.import_names(store, "google_photos", [{"name": name, "items": found}], apply=False)
+                raise ToolError("invalid_arguments", "people_items [{kind, local}] or packed (step 3's text) for this person's photos")
+            # the read is kept and every name read so far is weighed again; names wait as proposals
+            imported = people.import_names(store, "google_photos", [{"name": name, "items": found, "seen": items}], apply=False)
     days = len(str(args.get("packed", "")).split()) if kind == "places" and complete else 0
     with store.connect() as db:
         ensure(db)

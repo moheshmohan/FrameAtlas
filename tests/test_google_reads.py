@@ -102,6 +102,25 @@ class GoogleReadTests(unittest.TestCase):
             self.assertTrue(got["how"])
         self.assertIn("__NAME__", tool(self.service, "google_read_script", {"step": 3})["script"])
         self.assertIn("throttles", tool(self.service, "google_read_script", {"step": 1})["notes"])
+        for step in (1, 3):
+            got = tool(self.service, "google_read_script", {"kind": "people", "step": step})
+            self.assertIn("people", got["how"])
+        self.assertIn("__NAME__", tool(self.service, "google_read_script", {"kind": "people", "step": 3})["script"])
+        with self.assertRaises(Exception):
+            google_reads.script(2, "people")
+
+    def test_people_reads_are_kept_and_weighed_together(self):
+        self.shoot("2024-05-20", ["10:00:00", "10:05:00"])
+        tool(self.service, "google_read_register", {"kind": "people", "entries": [{"name": "Ann"}, {"name": "Ben"}]})
+        # 2024-05-20T10:00:00 local is base-36 "sds3s0" seconds; a packed read is unpacked
+        got = tool(self.service, "google_read_result", {"kind": "people", "name": "Ann", "items": 1, "complete": True, "packed": "Psds3s0"})
+        self.assertEqual((got["state"], got["imported"]["names"]), ("done", 1))
+        got = tool(self.service, "google_read_result", {"kind": "people", "name": "Ben", "items": 1, "complete": True,
+                                                         "people_items": [{"kind": "photo", "local": "2024-05-20T10:05:00"}]})
+        self.assertEqual(got["imported"]["names"], 2)  # Ann's read is still there
+        with self.store.connect() as db:
+            kept = [r[0] for r in db.execute("SELECT name FROM external_reads ORDER BY name")]
+        self.assertEqual(kept, ["Ann", "Ben"])
 
     def test_a_place_read_alone_takes_a_nearby_places_zone(self):
         self.shoot("2024-05-13", ["11:00:07", "19:23:41"])

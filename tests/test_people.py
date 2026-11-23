@@ -432,6 +432,25 @@ class PeopleTests(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 self.service.dispatch("people_import_names", bad)
 
+    def test_items_at_one_second_all_count_and_a_second_or_two_off_still_matches(self):
+        self.scan()
+        with self.store.connect() as db:
+            for i, aid in self.ids.items():
+                db.execute("UPDATE assets SET captured=? WHERE id=?", (f"2024-05-20T10:0{i}:1{i}Z", aid))
+            db.execute("UPDATE assets SET captured=? WHERE id=?", ("2024-05-20T10:05:15Z", self.ids[6]))  # a burst with 5
+            items = [{"kind": "photo", "local": "2024-05-20T14:05:15"}, {"kind": "photo", "local": "2024-05-20T14:01:12"},
+                     {"kind": "photo", "local": "2024-05-20T14:02:15"}, {"kind": "photo", "local": "2024-05-20T14:03:13"},
+                     {"kind": "photo", "local": "2024-05-20T14:00:10"}]
+            sets = people.match_sets(db, items)
+        # the burst gives both; 14:01:12 is a second off item 1; 14:02:15 is three seconds off: no match
+        self.assertEqual([sorted(s) for s in sets[:3]], [sorted([self.ids[5], self.ids[6]]), [self.ids[1]], []])
+        self.assertEqual(people.unpack_items("Ps8bzlr junk Vs5vdmb"),
+                         [{"kind": "photo", "local": "2024-02-04T12:20:15"}, {"kind": "video", "local": "2023-12-18T15:56:35"}])
+        with self.assertRaises(ValueError):
+            people.import_names(self.store, "google_photos")  # nothing read yet
+        out = people.import_names(self.store, "google_photos", [{"name": "Burst", "packed": "Psdsf4r"}], min_count=1)
+        self.assertEqual((out["names"], out["matched"]), (1, 2))
+
     def test_names_go_to_people_seen_mostly_in_that_name_and_mixed_results_are_only_proposed(self):
         self.scan()
         people.regroup(self.store, self.native)
@@ -454,6 +473,35 @@ class PeopleTests(unittest.TestCase):
         prop = self.service.dispatch("people_review", {"actor": "google"})["items"]
         self.assertEqual(len(prop), 1)
         self.assertTrue(prop[0]["detail"]["why"].startswith("mixed"))
+        # the owner can give a mixed name to either candidate, and undo it
+        first, second = prop[0]["person_id"], prop[0]["other_id"]
+        self.assertEqual({first, second}, {a, b})
+        self.service.dispatch("people_review_decide", {"id": prop[0]["id"], "decision": "apply_other"})
+        self.assertEqual((names()[second], names()[first]), ("Kay", ""))
+        people.decide(self.store, prop[0]["id"], "undo")
+        self.assertEqual(names()[second], "")
+        with self.assertRaises(ValueError):
+            people.decide(self.store, prop[0]["id"], "apply_other")  # no longer proposed
+        # reads are kept: a later import weighs every name read so far
+        out = people.import_names(self.store, "google_photos")
+        # the owner undid Kay on the second candidate, so only the first is left for Kay: no longer mixed
+        self.assertEqual((out["names"], out["mixed"]), (2, []))
+        prop = self.service.dispatch("people_review", {"actor": "google"})["items"]
+        self.assertEqual([(e["person_id"], e["detail"]["name"]) for e in prop], [(first, "Kay")])
+        # X's pictures show a alone, so X is a; Y is a in all of its pictures too, so Y does not fall
+        # back to b, whom it is seen with less: mixed
+        records = [{"name": "X", "items": items(0, 2, 4)}, {"name": "Y", "items": items(0, 1, 2, 3, 4)}]
+        out = people.import_names(self.store, "google_photos", records, apply=True, replace=True, min_count=1, min_lift=0.5)
+        self.assertEqual((out["named"], out["mixed"]), (1, ["Y"]))
+        self.assertEqual((names()[a], names()[b]), ("X", ""))
+        prop = self.service.dispatch("people_review", {"actor": "google"})["items"]
+        self.assertEqual([(e["person_id"], e["other_id"], e["detail"]["why"]) for e in prop], [(b, a, f"mixed: seen more with #{a}")])
+        # an undone name stays undone when the names are weighed again
+        applied = people.review(self.store, status="applied", actor="google")["items"]
+        people.decide(self.store, next(e["id"] for e in applied if e["detail"].get("name") == "X"), "undo")
+        people.import_names(self.store, "google_photos", apply=True, min_count=1, min_lift=0.5)
+        self.assertNotEqual(names()[a], "X")  # (with X ruled out, Y, seen with a in every picture, may take a)
+        people.update_person(self.store, a, name="")
         # a person already called a name keeps it, even when another name is seen with them more
         people.update_person(self.store, b, name="Bina")
         records = [{"name": "Bina", "items": items(0, 1, 2, 3, 5, 6)}, {"name": "Other", "items": items(1, 3, 6)}]

@@ -200,8 +200,8 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
   grouped by cause with the fix, Google selections about to expire with jobs waiting, items never
   analysed, a paused queue, Google page reads still to do, people-sorting proposals and unlinked
   faces, and agent calls waiting for you, most urgent first.
-- **Google page reads as a plan**: reading Google Photos' Places in your browser is a resumable
-  plan FrameAtlas keeps. `google_read_register` takes the list page's names, `google_read_next` hands
+- **Google page reads as a plan**: reading Google Photos' Places (or People & pets) in your browser is
+  a resumable plan FrameAtlas keeps. `google_read_register` takes the list page's names, `google_read_next` hands
   out the next few within the hour's search budget (none while Google is likely throttling, with when
   to try again), `google_read_script` gives the browser step to run, and `google_read_result` takes
   the page's result straight back: a complete read is imported at once, one that stopped early is
@@ -333,15 +333,28 @@ frames spread over a video), which replace the preview's.
   unlinks wait there for a yes or no. **Find suggestions** only proposes. Faces you confirmed are
   never touched, a "no" is not asked again, and every change can be undone.
 - Names from **Google Photos' People & pets** can be brought over: each named person's photos are
-  matched to the catalogue by their local capture time (to the second, the time zone found by
-  trying every quarter-hour offset) and kind, and the person seen in most of them gets the name.
-  Names you gave are never replaced (a different Google name is only proposed), and groups that
-  turn out to be the same Google person are merged when their faces agree.
+  matched to the catalogue by their local capture time (to the second, or a second or two off;
+  the time zone found by trying every quarter-hour offset) and kind. Every item at the same second
+  counts, since bursts and copies show the same people. All the names read so far are weighed
+  together: a name goes to the person seen far more in its photos than across the whole library
+  (the family behind the camera is in everyone's photos), a group photo counts for less than a
+  photo of one or two, and names and people are paired so that a couple always photographed
+  together gets two names rather than one. Anything unclear waits under **To review** with both
+  candidates side by side, to give the name to either or neither. Names you gave are never
+  replaced (a different Google name is only proposed), a name you undo or turn down is not given to
+  that person again, and groups that turn out to be the same Google person are merged when their
+  faces agree. Google's own face pictures cannot be read by FrameAtlas, so a model that can see
+  can compare them with `people_compare` crops by eye.
 
 Agents sort faces the same way: `people_autosort` (propose, or `apply`), `people_review`,
-`people_review_decide` (apply, dismiss, undo), and `people_compare`, which returns the face crops
-as images so a model that can see can judge a merge or a link by eye. `people_import_names` takes
-another library's named people as `{name, items: [{kind, local}]}`.
+`people_review_decide` (apply, apply_other for a name's other candidate, dismiss, undo), and
+`people_compare`, which returns the face crops as images so a model that can see can judge a merge
+or a link by eye. `people_import_names` takes another library's named people as
+`{name, items: [{kind, local}]}` or `{name, packed}` (the people script's text); reads are kept, so
+it can be given just the new names, or none to weigh everything again. Reading Google's People &
+pets goes through the read plan with `kind: people`: `google_read_script` step 1 lists the names,
+step 3 reads one person (`scripts/google_photos_people.js`), and `google_read_result` keeps the read
+and proposes; `people_import_names` with `apply: true` then names the clear ones.
 - **Relations and birthdays**: `person_details` records how someone is related to you ("our son") and
   when they were born. Idea writing uses the relation exactly as given, and birthdays join the calendar.
   `person_timeline` shows a person's years in the media (with their age), examples and who they appear
