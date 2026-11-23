@@ -232,6 +232,11 @@ client can run the whole app. `tools/list` tells it how far it can trust each to
   when no caption uses them, narrowed by the usual filters. It compares pictures, not speech or names.
   It needs a FilmCraft build with `media.embed` and `media.nearest`, and the already-installed
   `siglip2-base-224` model; nothing is downloaded.
+  To bring what it finds into a video, AutoCut picks exactly those Google Photos items in Google's
+  picker: `filmcraft-cli photos pick --meaning "kids laughing on a boat"`, or hand the found items'
+  `captured` and `kind` to AutoCut's `googlephotos_pick` as `items`. Provider and kind filters are
+  applied to every hit, so a search of only Google videos looks past the first matches of the
+  whole library.
 - **Best shots**: `catalog_best_shots` ranks the scenes of a trip, a day, a person, a place or any search
   by the picture quality measured during analysis (sharp, well exposed, steady), spread over items and
   days, and story writing sees each scene's quality so it prefers the better take.

@@ -165,7 +165,9 @@ def search(store, query, limit=48, cli=None, **filters):
         raise ToolError("invalid", "No previews have vectors yet", "Run semantic_build first (it runs on the GPU, a few minutes per 10,000 previews).")
     if not info["consistent"]:
         raise ToolError("invalid", "The vector index does not match its row list; run semantic_reset, then build again")
-    want = min(1000, limit * 5 if filters else limit)
+    # provider and kind are read off each hit; the other filters go through the catalogue search
+    direct = {k: filters.pop(k) for k in ("provider", "kind") if filters.get(k) not in (None, "")}
+    want = min(1000, max(limit * 10, 200)) if (filters or direct) else limit
     done = subprocess.run([cli, "exec", "media.nearest", json.dumps({"index": str(index_path(store)), "query": query.strip(),
                                                                        "dims": DIMS, "limit": want})],
                           capture_output=True, text=True, timeout=180)
@@ -180,8 +182,10 @@ def search(store, query, limit=48, cli=None, **filters):
         return {"items": [], "total": 0, "query": query}
     with store.connect() as db:
         ensure(db)
+        where = "".join(f" AND a.{k}=?" for k in direct)
         by_row = {r["row"]: r["asset_id"] for r in db.execute(
-            f"SELECT asset_id, row FROM embeddings WHERE row IN ({','.join('?' * len(rows))})", list(rows))}
+            f"SELECT e.asset_id, e.row FROM embeddings e JOIN assets a ON a.id=e.asset_id"
+            f" WHERE e.row IN ({','.join('?' * len(rows))}){where}", [*rows, *direct.values()])}
     allowed = None
     if filters:
         allowed = set()

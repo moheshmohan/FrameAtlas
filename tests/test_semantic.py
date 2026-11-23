@@ -89,6 +89,9 @@ class SemanticTests(unittest.TestCase):
         only_photos = semantic.search(self.store, "red", limit=5, cli=str(self.cli), kind="photo")
         self.assertEqual(only_photos["items"][0]["id"], self.ids["red"][0])
         self.assertNotIn(self.ids["red"][1], [i["id"] for i in only_photos["items"]])
+        videos = semantic.search(self.store, "red", limit=5, cli=str(self.cli), kind="video", provider="local")
+        self.assertEqual([i["id"] for i in videos["items"]], [self.ids["red"][1]])
+        self.assertEqual(semantic.search(self.store, "red", cli=str(self.cli), provider="google_photos")["items"], [])
 
     def test_errors_are_explained(self):
         with self.assertRaises(ValueError) as caught:
